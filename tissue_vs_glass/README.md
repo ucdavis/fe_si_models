@@ -5,6 +5,9 @@ The intended use is to 1) Use the model output as a base for identifying tissue 
 
 SOP here: https://docs.google.com/presentation/d/1g9QMLUlkV8ITmbK1x9Ol7yW0G8M7sXVrNF_m_vysnBk/edit?usp=drive_link
 
+## Model versions
+An overview over model versions - and which one to use is here: https://docs.google.com/spreadsheets/d/14arTrgun_KB4gPumhx4ZE5X8JcgudXyupEgvB8jFlgA/edit?usp=sharing
+
 ## Model type
 A multi-layer perceptron (MLP) (a shallow artificial neural network ANN) - this
 type of network uses hand-crafted features (for this one RGB pixel values and gaussian filters) 
