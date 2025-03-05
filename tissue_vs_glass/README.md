@@ -69,3 +69,5 @@ LABL_2020 WSIs <INSERT LINK>: Test set, batch 1 & 2
 
 ## Materials & methods
 
+A draft of materials&methods for this model is here:
+https://docs.google.com/document/d/1Lni-o9eW2jZ4UXC-QhvEW9tEqqR1mb3KGefZJwLDfKw/edit?usp=sharing
