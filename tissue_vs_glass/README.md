@@ -1,36 +1,71 @@
-## Objective
-This is a QuPath pixel classifier for classifying pixels as tissue vs glass.
-The intended use is to 1) Use the model output as a base for identifying tissue fragments and 
-2) Use as a parent model for the mucosal_layer_model (crypts_vs_villi)
+## Objective 
+Separate area of a WSI with tissue (of any kind) from areas with glass (including
+empty glass, pen markings, stain droplets etc)
 
-SOP here: https://docs.google.com/presentation/d/1g9QMLUlkV8ITmbK1x9Ol7yW0G8M7sXVrNF_m_vysnBk/edit?usp=drive_link
+## Intended use
+- Serve as a base for separating tissue fragments <INSERT LINK>
+- Serve as a parent layer for other models 
+  - fe_si_layers_crypts_villi <INSERT LINK>
 
-## Model versions
-An overview over model versions - and which one to use is here: https://docs.google.com/spreadsheets/d/14arTrgun_KB4gPumhx4ZE5X8JcgudXyupEgvB8jFlgA/edit?usp=sharing
+## Model architecture
+- Multi-layer perceptron (MLP) (a shallow artificial neural network ANN) 
+- Semantic segmentation (pixel classifier)
 
-## Model type
-A multi-layer perceptron (MLP) (a shallow artificial neural network ANN) - this
-type of network uses hand-crafted features (for this one RGB pixel values and gaussian filters) 
+## Classes
+- Tissue
+- Glass
 
-## Case material
-Training: labl_2020_training (added by batch until satisfactory performance in tuning set - only batch 1 and 2)
-Tuning: labl_2020_tuning
-Test: labl_2020_test
+## Model development
+SOP: <https://docs.google.com/presentation/d/1g9QMLUlkV8ITmbK1x9Ol7yW0G8M7sXVrNF_m_vysnBk/edit?usp=drive_link>
 
-## Training annotations
-see SOP
+### Software
+QuPath v0.5.1
 
-## Hyperparameters
-Model type and hyperparameters were set based on assessments in the training set
-(procedure in SOP) and documented here: 
+### Hardware
+JUDITS_PC Specs here: 
+https://docs.google.com/spreadsheets/d/1Ue-r-fvt8fJIE0h0DGZL6AWinbydgwbYKjDaHcTdx3k/edit?usp=drive_link
+
+### Development material
+
+#### Training
+
+##### Images
+LABL_2020 WSIs <INSERT LINK>: Training set, batch 1 & 2
+
+#### Annotations
+Annotations strategy here: https://docs.google.com/spreadsheets/d/1Ue-r-fvt8fJIE0h0DGZL6AWinbydgwbYKjDaHcTdx3k/edit?usp=drive_link
+<fe_si_models/tissue_vs_glass/annotations/training/tissue_vs_glass_v1>
+<fe_si_models/tissue_vs_glass/annotations/training/tissue_vs_glass_v2>
+
+#### Tuning 
+
+##### Images
+LABL_2020 WSIs <INSERT LINK>: Tuning set, full set
+
+##### Annotations
+NA (visual assessment only)
+
+### Hyperparameters 
+https://docs.google.com/spreadsheets/d/14arTrgun_KB4gPumhx4ZE5X8JcgudXyupEgvB8jFlgA/edit?usp=sharing
+- setting in sheet "selecting_hyperparameters"
+- selected in sheet "model_versions"
+
+### Model versions
 https://docs.google.com/spreadsheets/d/14arTrgun_KB4gPumhx4ZE5X8JcgudXyupEgvB8jFlgA/edit?usp=sharing
 
-## Tuning assessment
-Output visually assessed in whole slide images, and documented here:
+### Tuning assessment
 https://docs.google.com/spreadsheets/d/1uXLYJ0KbuQHwRvG_OOtYaGBr4jlTv9TtmFlvYeLK7-4/edit?usp=sharing 
-and in SOP
 
-## Testing
-This can be tested using the test annotations for the mucosal layer model, but merging
-annotations for villi, crypts, muscularis_mucosa, submucosa, muscularis_propria, 
-gastric mucosa, rafts and blood as tissue and pen, print and empty as glass.
+
+## Model testing
+
+### Test material
+
+#### Images
+LABL_2020 WSIs <INSERT LINK>: Test set, batch 1 & 2
+
+#### Annotations
+<INSERT LINK>
+
+## Materials & methods
+
