@@ -2,10 +2,11 @@
 Separate area of a WSI with tissue (of any kind) from areas with glass (including
 empty glass, pen markings, stain droplets etc)
 
+![Schematic](assets/overview_tissue_vs_glass.png)
+
 ## Intended use
-- Serve as a base for separating tissue fragments <INSERT LINK>
-- Serve as a parent layer for other models 
-  - fe_si_layers_crypts_villi <INSERT LINK>
+- Serve as a base for separating tissue fragments (fe_si_models/fragments)
+
 
 ## Model architecture
 - Multi-layer perceptron (MLP) (a shallow artificial neural network ANN) 
