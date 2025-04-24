@@ -1,0 +1,136 @@
+---
+title: "random_roi"
+author: "Wulcan"
+date: "2025-02-18"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Objective
+Generate random roi within content of a wsi.
+
+This script can be used to generate a random ROI in any geometry. The ROI can be imported to qupath for annotation.
+
+### Input
+- geojsons with regions to generate the ROI within. E.g.
+  - A whole image (add_wsi_annotation.groovy) 
+  - Content recognized by a pixel thresholder (https://docs.google.com/presentation/d/1XTb9_OsEHadeK00zn1mO5zQvz4I9exASDEQFf6HTTNY/edit?usp=sharing)
+  - Or any geojson with AI output (from already validated model)
+
+### Parameters
+- input_dir (folder with geojson files for regions)
+- output_dir (folder to output the ROI to - naming strategy: output/random_roi/<image_set_name>_<parent_class>.geojson) 
+- parent_class (the classification of the region you'd want to generate the ROI within)
+- roi_radius (the radius of the intended roi in pixels)
+
+```{r, functions}
+
+create_random_roi <- function(input_dir, output_dir, parent_class, roi_radius_px, roi_name) {
+  
+  # Load required libraries
+  library(tidyverse)
+  library(sf)
+  library(jsonlite)
+  
+  # Increase the maximum object size for GeoJSON reading
+  Sys.setenv(OGR_GEOJSON_MAX_OBJ_SIZE = 0)
+  
+  # Helper function to extract the "name" from a JSON string if applicable
+  extract_name <- function(x) {
+    if (is.character(x) && grepl("^\\s*\\{", x)) {
+      result <- tryCatch({
+        parsed <- fromJSON(x)
+        if (!is.null(parsed$name)) {
+          return(parsed$name)
+        } else {
+          return(x)
+        }
+      }, error = function(e) {
+        return(x)
+      })
+      return(result)
+    } else {
+      return(x)
+    }
+  }
+  
+  # Get the list of input file paths
+  input_file_paths <- list.files(input_dir, full.names = TRUE)
+  
+  # Set seed for reproducibility
+  set.seed(42)
+  
+  # Loop over each file in the input directory
+  for (path in input_file_paths) {
+    file_name <- basename(path)
+    image_name <- sub("_content.*", "", file_name)
+    
+    # Read the region GeoJSON and set CRS to 0
+    region <- st_read(path, quiet = TRUE) %>%
+      st_set_crs(0)
+    
+    # Extract classification names if they are stored as JSON
+    region$classification <- sapply(region$classification, extract_name)
+    
+    # Filter the regions based on the specified parent_class
+    region <- region %>% filter(classification == parent_class)
+    
+    # Sample a random point within the filtered region
+    random_point_in_region <- st_sample(region, 1)
+    
+    # Create a buffer around the random point using the specified ROI radius
+    random_roi_in_region <- st_buffer(random_point_in_region, dist = roi_radius_px)
+    
+    # Create an sf object for the ROI with the given name and classification
+    roi_sf <- st_sf(
+      data.frame(
+        name = roi_name,
+        classification = "roi",
+        isLocked = TRUE
+      ),
+      geometry = random_roi_in_region
+    )
+    
+    # Construct the output file path and write the ROI to a GeoJSON file
+    output_file <- file.path(output_dir, paste0(image_name, "_roi.geojson"))
+    st_write(roi_sf, output_file, quiet = TRUE)
+  }
+}
+
+```
+
+
+### Make roi in "content" of in labl_2020_test set
+#### Objective
+This chunk, creates a random roi per wsi in the "content" regions of slides in the labl_2020_test set.The rois are read into qupath annotated and used to validate the tissue_vs_glass model
+
+#### Input
+- <image_name>_content_<annotation_no>.geojson: These files are generated using qupaths pixel thresholder (SOP for creating the thresholder, making detections annotations and exporting them as geojsons are here:  (https://docs.google.com/presentation/d/1XTb9_OsEHadeK00zn1mO5zQvz4I9exASDEQFf6HTTNY/edit?usp=drive_link). 
+
+#### Output
+- <image_name>_roi.geojson (Projects/qupath/output/random_roi/labl_2020_test/in_content/)
+
+```{r, warning=FALSE, message=FALSE}
+
+
+to_box <- "~/Library/CloudStorage/Box-Box/"
+input_dir <- paste0(to_box, "Projects/fe_si_models/content_vs_background/output/export_content/")
+output_dir <- paste0(to_box, "Projects/fe_si_models/tissue_vs_glass/output/random_roi/")
+parent_class <- "content"
+roi_radius_px <- 2000 #the dist is set by visual inspection to have a good likelihood of including villi and crypts
+roi_name <- paste0("random_in_",parent_class)
+
+input_file_paths <- list.files(input_dir, full.names = TRUE)
+
+create_random_roi(input_dir, output_dir, parent_class, roi_radius_px, roi_name)
+
+```
+
+
+
+
+
+
