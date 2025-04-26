@@ -69,8 +69,6 @@ library(sf)
 Sys.setenv(OGR_GEOJSON_MAX_OBJ_SIZE = 0)
 library(nngeo) #remove holes in outline
 options(scipen = 999) #turn of scientific notation
-library(readxl)
-library(writexl)
 
 to_box <- "~/Library/CloudStorage/Box-Box/"
 
