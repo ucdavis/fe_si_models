@@ -1,4 +1,3 @@
-## Folder objective
 This folder documents development and testing of the layers model (fe_si_layers_pv6_mv11)
 
 ## Model objective
@@ -17,7 +16,6 @@ This and previous project and model versions for small intestinal layer segmenta
 are documented here: 
 
 https://docs.google.com/spreadsheets/d/1Bg5ZT4h1TjjKgKP76iZ03OzNSspau0jlSxPWKsOVVXw/edit?usp=sharing
-
 
 ## Testing
 
