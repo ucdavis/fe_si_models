@@ -1,0 +1,210 @@
+---
+title: "process_combos"
+author: "Wulcan"
+date: "2025-05-05"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Objective
+The objective of this script is to process the aiforia combos models output files to
+separate files for layers, tissues and cells by tissue fragment for further processing
+
+### Input
+- *subset_<image_subset>.geojson* (fe_si_images/process_subset/)
+Dfs with image names and metadata 
+-*<image_name>_<model_version>_by_class.geojson* (fe_si_models/combos/output/<model_version>/)
+Contains geojson files with output coordinates for model_version. Downloaded from aiforia create with aiforia/scripts/get_image_analysis_results.Rmd
+
+-*<image_name>_fragments.geojson* (fe_si_models/fragments/output/fragments/)
+Contains geometries for tissue fragments - generated with fe_si_models/fragments/scripts/fragments.Rmd
+
+### Output
+- <image_name>_<fragment_name>_layers_<model_version>.geojson
+- <image_name>_<fragment_name>_tissues_<model_version>.geojson
+- <image_name>_<fragment_name>_cells_<model_version>.geojson
+
+```{r, message=FALSE, warning=FALSE}
+library(jsonlite)
+library(tidyverse)
+library(sf)
+Sys.setenv(OGR_GEOJSON_MAX_OBJ_SIZE = 0)
+
+to_box <- "~/Library/CloudStorage/Box-Box/"
+
+#This function takes a vector of image names and arranges them by file size for a model_version output
+arrange_image_names <- function(image_names, model_version, combos_dir){
+  #Expected file names
+  expected_files <- paste(image_names, model_version, "sep.geojson", sep = "_")
+  
+  #List actual files in directory
+  actual_files <- list.files(combos_dir)
+  
+  #Identify downloaded images
+  downloaded_image_results <- image_names[expected_files %in% actual_files]
+  
+  #Initialize empty df
+  downloaded_image_files <- data.frame(
+    image_name = character(),
+    file_path = character(),
+    files_size_mb = numeric(),
+    stringsAsFactors = FALSE
+  )
+  
+  #Populate df
+  for (image in downloaded_image_results){
+    file_path <- paste0(combos_dir, image, "_", model_version, "_sep.geojson")
+    
+    #Get file size in MB
+    file_size_mb <- file.info(file_path)$size / (1024^2)
+    
+    #Create df row
+    downloaded_image_file <- data.frame(
+      image_name = image,
+      file_path = file_path,
+      file_size_mb = file_size_mb,
+      stringsAsFactors = FALSE
+    )
+    
+    #Append to df
+    downloaded_image_files <- rbind(downloaded_image_files, downloaded_image_file)
+  }
+  
+  
+  #Arrange by file size (smallest first)
+  downloaded_image_files <- downloaded_image_files %>%
+    arrange(file_size_mb)
+  
+  return(downloaded_image_files)
+}
+
+process_image_fragments <- function(image_names, model_version, combos_dir, fragments_dir, output_dir) {
+
+  arranged_images <- arrange_image_names(image_names, model_version, combos_dir)
+  arranged_image_names <- arranged_images$image_name
+
+  files <- list.files(output_dir)
+
+  not_in_files <- arranged_image_names[
+    !vapply(
+      arranged_image_names,
+      function(image) any(startsWith(files, image)),
+      logical(1)
+    )
+  ]
+
+  no_fragments_with_si_layers <- c()
+
+  for (image in not_in_files){
+    cat("Processing image", image, "\n")
+
+    file_data <- arranged_images %>% filter(image_name == image)
+
+    image_combos <- st_read(file_data$file_path, quiet = TRUE) %>%
+      st_set_crs(0)
+
+    image_layers <- image_combos %>%
+      filter(classification %in% c("villi", "crypts"))
+
+    image_tissues <- image_combos %>%
+      filter(classification %in% c("epithelium", "lumen", "lamina_propria"))
+
+    image_lymphocytes <- image_combos %>%
+      filter(classification == "lymphocytes")
+
+    fragment_path <- file.path(fragments_dir, paste0(image, "_fragments.geojson"))
+
+    image_fragments <- st_read(fragment_path, quiet = TRUE) %>%
+      st_set_crs(0) %>%
+      filter(classification == "included_fragment") %>%
+      rename(fragment_name = name) %>%
+      select(-classification, -exclusion_reason, -id, -included)
+
+    # Function to match fragments
+    match_fragments <- function(target_data, fragments){
+      intersection_indices <- st_intersects(target_data, fragments, sparse = TRUE)
+      indices <- sapply(intersection_indices, function(x) if (length(x) > 0) x[1] else NA)
+      valid_indices <- !is.na(indices)
+
+      matched_data <- target_data[valid_indices, ] %>%
+        filter(st_geometry_type(.) %in% c("POLYGON", "MULTIPOLYGON"))
+
+      st_intersection(matched_data, fragments)
+    }
+
+    layers_by_fragment <- match_fragments(image_layers, image_fragments)
+    tissues_by_fragment <- match_fragments(image_tissues, image_fragments)
+    lymphocytes_by_fragment <- match_fragments(image_lymphocytes, image_fragments)
+
+    for (fragment in image_fragments$fragment_name){
+      fragment_fragment <- image_fragments %>% filter(fragment_name == fragment)
+      fragment_layers <- layers_by_fragment %>% filter(fragment_name == fragment)
+      fragment_tissues <- tissues_by_fragment %>% filter(fragment_name == fragment)
+      fragment_lymphocytes <- lymphocytes_by_fragment %>% filter(fragment_name == fragment)
+
+      # Writing outputs
+      st_write(fragment_fragment,
+               file.path(output_dir, paste0(image, "_", fragment, "_fragment.geojson")),
+               quiet = TRUE,
+               delete_dsn = TRUE)
+
+      st_write(fragment_layers,
+               file.path(output_dir, paste0(image, "_", fragment, "_layers.geojson")),
+               quiet = TRUE,
+               delete_dsn = TRUE)
+
+      st_write(fragment_tissues,
+               file.path(output_dir, paste0(image, "_", fragment, "_tissues.geojson")),
+               quiet = TRUE,
+               delete_dsn = TRUE)
+
+      st_write(fragment_lymphocytes,
+               file.path(output_dir, paste0(image, "_", fragment, "_lymphocytes.geojson")),
+               quiet = TRUE,
+               delete_dsn = TRUE)
+    }
+  }
+
+  cat("Processing completed.\n")
+}
+```
+
+
+### Process image fragment for labl_2020_tuning model fe_si_combos_pv2_mv2
+Processes image fragments for labl_2020 tuning image if the results for the corresponding model has been downloaded
+####  Input
+- subset_labl_2020_tuning.json (fe_si_images/output/process_subset/)
+- *<image_name>_fe_si_combos_pv2_mv2_sep.geojson* (fe_si_models/combos/output/fe_si_combos_pv2_mv2/)
+Results downloaded from aiforia and processed with "get_image_analysis_results.Rmd" (aiforia/scripts)
+- *<image_name>_fragments.geojson*(fe_si_models/fragments/output/fragments/)
+fragment cooridnates 
+
+#### Output
+- *<image_name>_<fragment_name>_fragment.geojson*
+- *<image_name>_<fragment_name>_layers.geojson*
+- *<image_name>_<fragment_name>_tissues.geojson*
+- *<image_name>_<fragment_name>_lymphocytes.geojson*
+
+```{r, message=FALSE, warning=FALSE}
+subset_labl_2020_tuning <- fromJSON("~/Library/CloudStorage/Box-Box/Projects/fe_si_images/output/process_subset/subset_labl_2020_tuning.json")
+
+image_names <- subset_labl_2020_tuning$image_name
+
+model_version <- "fe_si_combos_pv2_mv2"
+
+combos_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/combos/output/fe_si_combos_pv2_mv2/"
+
+arranged_images <- arrange_image_names(image_names, model_version, combos_dir)
+
+fragment_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/fragments/output/fragments/"
+
+output_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/combos/output/process_combos/"
+
+process_image_fragments(image_names, model_version, combos_dir, fragment_dir, output_dir)
+```
+
+
+
