@@ -1,0 +1,637 @@
+---
+title: "validate_layers"
+author: "Wulcan"
+date: "2025-05-07"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Objective
+This script is to validate the layers model (crypt vs. villi)
+
+```{r, libraries, directories and functions}
+library(sf)
+Sys.setenv(OGR_GEOJSON_MAX_OBJ_SIZE = 0)
+library(tidyverse)
+library(jsonlite)
+library(purrr)
+options(scipen = 999) #turn of scientific notation
+library(readxl)
+library(writexl)
+
+to_box <- "~/Library/CloudStorage/Box-Box/"
+
+# occasionally annotations are not closed - and becomes linestrings instead of polygons. This function fixes that.
+convert_linestrings_to_polygons <- function(sf_df) {
+  new_geoms <- lapply(st_geometry(sf_df), function(geom) {
+    geom_type <- as.character(st_geometry_type(geom))
+    if (geom_type %in% c("LINESTRING", "LINESTRING Z")) {
+      # Get the coordinate matrix
+      coords <- st_coordinates(geom)
+      # Check closure using only x and y values
+      if (!all(coords[1, 1:2] == coords[nrow(coords), 1:2])) {
+        coords <- rbind(coords, coords[1,])
+      }
+      # Drop extra dimensions (Z/M) by keeping only x and y
+      coords <- coords[, 1:2, drop = FALSE]
+      # Construct and return a polygon using the 2D, closed coordinates
+      st_polygon(list(coords))
+    } else {
+      # For geometries that are not LINESTRINGs, return them unchanged
+      geom
+    }
+  })
+  
+  # Replace the geometry column while preserving other attributes
+  st_set_geometry(sf_df, st_sfc(new_geoms, crs = st_crs(sf_df)))
+}
+
+# Read annotation geojsons 
+read_annotations_raw <- function(annotation_dir, image_names) {
+  annotations <- image_names %>% 
+    map_dfr(function(img) {
+      print(paste0("Retreiving annotation image ", img))
+      pattern <- paste0("^", img, ".*\\.geojson$")
+      files <- list.files(path = annotation_dir, pattern = pattern, full.names = TRUE)
+      
+      if (length(files) > 0) {
+        map_dfr(files, function(file) {
+          st_read(file, quiet = TRUE) %>%
+            st_set_crs(0) %>%
+            select(classification, geometry) %>%
+            # Add image_name; extract classification name from the JSON; set confidence_percentage to 100;
+            # mark these rows as "annotation"
+            mutate(
+              image_name = img,
+              classification = map_chr(classification, ~ fromJSON(.x)$name),
+              confidence_percentage = 100,
+              source = "annotation"
+            )
+        })
+      } else {
+        message("No files found for image: ", img)
+        tibble(
+          classification = character(),
+          geometry = st_sfc(),
+          image_name = character(),
+          confidence_percentage = numeric(),
+          source = character()
+        )
+      }
+    })
+  
+  # Convert to an sf data frame
+  annotations <- st_as_sf(annotations)
+  
+  # Convert any LINESTRING geometries to POLYGONs
+  annotations <- convert_linestrings_to_polygons(annotations) %>%
+    st_make_valid()
+  
+  # Group by and union geometries
+  annotations_united <- annotations %>%
+    group_by(image_name, classification, confidence_percentage, source) %>%
+    summarise(geometry = st_union(geometry), .groups = "drop")
+  
+  return(annotations_united)
+}
+
+
+
+
+#Function to read and parse ai output (this is slow)
+read_ai_output <- function(directory, image_names, classes, ai_model_name) {
+  output_sf <- image_names %>% 
+    map_dfr(function(img) {
+      message("Retrieving AI output for image: ", img, " with model: ", ai_model_name)
+      # Adjust pattern to match the file naming format: <image_name>_<ai_model_name>.geojson
+      pattern <- paste0("^", img, "_", ai_model_name, "\\.geojson$")
+      files <- list.files(path = directory, pattern = pattern, full.names = TRUE)
+      
+      if (length(files) > 0) {
+        map_dfr(files, function(file) {
+          st_read(file, quiet = TRUE) %>%
+            st_set_crs(0) %>%
+            filter(classification %in% classes) %>%
+            mutate(
+              image_name = img,
+              source = "ai"  # flag as AI output
+            ) %>%
+            select(image_name, classification, confidence_percentage, geometry, source)
+        })
+      } else {
+        message("No files found for image: ", img, " with AI model: ", ai_model_name)
+        tibble(
+          image_name = character(),
+          classification = character(),
+          confidence_percentage = numeric(),
+          geometry = st_sfc(),
+          source = character()
+        )
+      }
+    })
+  
+  output_sf <- st_as_sf(output_sf)
+  output_sf <- convert_linestrings_to_polygons(output_sf)
+  output_sf <- st_make_valid(output_sf)
+  
+  return(output_sf)
+}
+
+# Function to process annotations and output by ROI – crop all features to the ROI (from annotation rows with classification "roi") and compute an "empty" polygon for the parts of the ROI that have no other output.
+
+process_roi <- function(combined_sf) {
+  library(sf)
+  library(dplyr)
+  library(purrr)
+  
+  processed <- map_dfr(unique(combined_sf$image_name), function(img) {
+    print(paste0("Processing annotation and ai output per roi for image ", img))
+    current <- combined_sf %>% filter(image_name == img)
+    
+    # Extract ROI geometry from annotation rows with classification "roi"
+    roi <- current %>% 
+      filter(source == "annotation", classification == "roi")
+    if (nrow(roi) == 0) {
+      message("No ROI found for image: ", img)
+      return(NULL)
+    } 
+    
+    
+    # Filter out features that do not overlap the ROI at all
+    current <- current[st_intersects(current, roi, sparse = FALSE), ]
+    
+    # Crop every feature to the ROI area
+    cropped <- current %>% 
+      mutate(geometry = st_intersection(geometry, roi)) %>%
+      filter(!st_is_empty(geometry))
+    
+    # For generating the empty observation, we create two sets:
+    # 1. For source "annotation": the ROI area not covered by any annotation output (excluding the ROI itself)
+    anno_nonroi <- cropped %>% filter(source == "annotation", classification != "roi")
+    if (nrow(anno_nonroi) > 0) {
+      union_anno <- st_union(anno_nonroi$geometry)
+      empty_geom_annotation <- st_difference(roi, union_anno)
+      } else {
+        empty_geom_annotation <- roi
+        }
+    
+    # 2. For source "ai": the ROI area not covered by any AI output
+    ai_nonroi <- cropped %>% filter(source == "ai")
+    if (nrow(ai_nonroi) > 0) {
+      union_ai <- st_union(ai_nonroi$geometry)
+      empty_geom_ai <- st_difference(roi, union_ai)
+      } else {
+        empty_geom_ai <- roi
+        }
+    
+    # Create empty sf objects if the difference is nonempty.
+    if (!is.null(empty_geom_annotation) && length(empty_geom_annotation) > 0 &&
+        !st_is_empty(empty_geom_annotation)) {
+      empty_annotation <- st_sf(
+        image_name = img,
+        classification = "empty",
+        confidence_percentage = 100,
+        source = "annotation",
+        geometry = empty_geom_annotation
+        )
+      cropped <- bind_rows(cropped, empty_annotation)
+      }
+    
+    if (!is.null(empty_geom_ai) && length(empty_geom_ai) > 0 &&
+        !st_is_empty(empty_geom_ai)) {
+      empty_ai <- st_sf(
+        image_name = img,
+        classification = "empty",
+        confidence_percentage = 100,
+        source = "ai",
+        geometry = empty_geom_ai
+        )
+      cropped <- bind_rows(cropped, empty_ai)
+    }
+  
+      # Explicitly return the cropped dataframe
+    return(cropped)
+  })
+}
+
+#Adds area and normalizes to roi size
+process_val_sf <- function(val_sf) {
+  # Read the sf data frame, set the CRS, and compute area in pixels squared
+  sf_df <- val_sf %>%
+    mutate(area_px2 = as.numeric(st_area(.)))
+  
+  # Helper function to get the mode of a vector
+  get_mode <- function(v) {
+    uniqv <- unique(v)
+    uniqv[which.max(tabulate(match(v, uniqv)))]
+  }
+  
+  # Calculate the mode of area_px2 for geometries with classification "roi"
+  roi_area_mode <- sf_df %>%
+    filter(classification == "roi") %>%
+    pull(area_px2) %>%
+    get_mode()
+  
+  # Add the normalized area and filter out any zero values
+  sf_df <- sf_df %>%
+    mutate(normalized_area = round(area_px2 / roi_area_mode, 3)) %>%
+    filter(normalized_area != 0) %>%
+    select(image_name:area_px2, normalized_area, geometry)
+  
+  return(sf_df)
+}
+
+library(dplyr)
+library(ggplot2)
+library(scales)
+
+explore_composition<- function(val_sf, class_palette) {
+  
+  # Summarize data: Compute total area per source and classification
+  val_sf_summary <- val_sf %>%
+    group_by(source, classification) %>%
+    summarise(total_area = sum(normalized_area, na.rm = TRUE), .groups = "drop") %>%
+    ungroup()
+
+  # Compute percentage of total area for each classification within each source
+  val_sf_summary <- val_sf_summary %>%
+    group_by(source) %>%
+    mutate(percentage = (total_area / sum(total_area)) * 100) %>%
+    arrange(source, desc(percentage)) %>%  # Arrange so the largest is first
+    ungroup()
+
+  # Reverse the stacking order: Ensure largest classification is at the top
+  val_sf_summary <- val_sf_summary %>%
+    group_by(source) %>%
+    mutate(classification = factor(classification, levels = classification[order(percentage)])) %>%
+    ungroup()
+
+  # Rename `source` labels for readability
+  val_sf_summary <- val_sf_summary %>%
+    mutate(source = case_when(
+      source == "ai" ~ "AI output",
+      source == "annotation" ~ "Validation annotation",
+      TRUE ~ source  # Keep other values unchanged
+    ))
+
+  # Create stacked bar plot
+  p <- ggplot(val_sf_summary, aes(x = source, y = percentage, fill = classification)) +
+    geom_bar(stat = "identity", position = "stack") +  # Stacked bar chart
+    scale_fill_manual(values = class_palette) +  # Custom color palette
+    labs(x = "", y = "", fill = "Classification") +
+    theme_bw(base_family = "Arial") +  # Set base font to Arial
+    theme(text = element_text(size = 9, family = "Arial"))  # Set font size 9
+
+  return(list(summary = val_sf_summary, plot = p))  # Return the plot
+}
+
+# Define function
+explore_ai_confidence <- function(sf_val, confidence_palette) {
+  
+  # Filter AI source 
+  data <- sf_val %>%
+    filter(source == "ai")
+  
+  # Create confidence bins (10% intervals)
+  data$confidence_bin <- cut(data$confidence_percentage,
+                             breaks = seq(0, 100, by = 10),
+                             include.lowest = TRUE,
+                             right = FALSE,
+                             labels = paste(seq(0, 90, by = 10), seq(10, 100, by = 10), sep = "-"))
+
+  # Summarize total area per classification and confidence_bin
+  df_plot <- data %>%
+    group_by(classification, confidence_bin) %>%
+    summarise(total_area = sum(normalized_area, na.rm = TRUE), .groups = "drop") %>%
+    group_by(classification) %>%
+    mutate(percent_area = total_area / sum(total_area) * 100) %>%
+    ungroup()
+  
+  # Reorder confidence_bin within each classification so the largest is at the bottom
+  df_plot <- df_plot %>%
+    arrange(classification, desc(percent_area)) %>%
+    mutate(confidence_bin = factor(confidence_bin, levels = rev(unique(confidence_bin))))  # Reverse to put largest at bottom
+
+  # Generate the stacked bar plot
+  p <- ggplot(df_plot, aes(x = classification, y = percent_area, fill = confidence_bin)) +
+    geom_bar(stat = "identity") +
+    scale_y_continuous(labels = scales::percent_format(scale = 1)) +  # Format as percentage
+    scale_fill_manual(values = confidence_palette) +  # Apply custom colors
+    labs(x = "", y = "Percentage of total area", fill = "AI confidence %") +
+    theme_bw(base_family = "Arial") +  # Set base font to Arial
+    theme(
+      text = element_text(size = 9, family = "Arial"),  # Set font size 9
+      legend.position = "right"
+    )  # Combined into a single theme() call
+  
+  return(list(summary = df_plot, plot = p))  # Properly return the plot object
+}
+
+
+#Explore calibration by class
+explore_calibration <- function(input_sf, target_class, bin_breaks, bin_labels) {
+  # Load required libraries (if not already loaded)
+  library(dplyr)
+  library(sf)
+  library(ggplot2)
+  
+  # Define a safe_area function to compute geometry area (or 0 if empty)
+  safe_area <- function(geom) {
+    if (length(geom) == 0 || all(st_is_empty(geom))) {
+      return(0)
+    } else {
+      return(as.numeric(st_area(geom)))
+    }
+  }
+  
+  # Filter to the target class (e.g. "villi" or "crypts")
+  target_df <- input_sf %>% filter(classification == target_class)
+  
+  # Create confidence bins.
+  
+  pred <- target_df %>%
+    mutate(confidence_bin = cut(confidence_percentage,
+                                breaks = bin_breaks,
+                                include.lowest = TRUE,
+                                right = FALSE,
+                                labels = bin_labels))
+  
+  # Separate ground truth and predictions.
+  gt_sf <- pred %>% filter(source == "annotation")
+  pred_sf <- pred %>% filter(source == "ai")
+  
+  # Union all ground truth geometries into one
+  gt_union <- st_union(gt_sf)
+  
+  # Group the prediction geometries by confidence bin and union them.
+  pred_bins <- pred_sf %>%
+    group_by(confidence_bin) %>%
+    summarise(geometry = st_union(geometry)) %>%  # one geometry per bin
+    ungroup()
+
+  # Compute the True Positive (TP) and False Positive (FP) geometries.
+  # TP: Intersection of the bin geometry with the ground truth.
+  # FP: Difference between the bin geometry and the ground truth.
+  pred_bins <- pred_bins %>%
+    rowwise() %>%
+    mutate(
+      TP_geom = list(st_union(st_intersection(geometry, gt_union))),
+      FP_geom = list(st_union(st_difference(geometry, gt_union)))
+    ) %>%
+    ungroup()
+
+  # Calculate the area for TP and FP, and compute PPV.
+  # Use a conditional check to avoid subscript out of bounds if the list element is empty.
+  pred_bins <- pred_bins %>%
+  rowwise() %>%
+  mutate(
+    TP_area = safe_area(TP_geom),
+    FP_area = safe_area(FP_geom),
+    PPV = ifelse((TP_area + FP_area) == 0, NA, TP_area / (TP_area + FP_area))
+  ) 
+  
+  pred_bins <- pred_bins %>% 
+    select(confidence_bin, TP_area, FP_area, PPV)
+
+  # Create and return the calibration plot.
+  p <- ggplot(pred_bins, aes(x = confidence_bin, y = PPV)) +
+    geom_point(size = 3) +
+    geom_line(aes(group = 1), linetype = "dashed") +
+    labs(x = "Confidence Bin", 
+         y = "Positive Predictive Value (PPV)",
+         title = paste("PPV by Confidence Bin for", target_class)) +
+    theme_bw(base_family = "Arial") +  # Set base font to Arial
+    theme(
+      text = element_text(size = 9, family = "Arial"),  # Set font size 9
+      legend.position = "right"
+    )
+  
+  return(list(summary = pred_bins, plot = p))
+}
+
+#Function to compute performance across different confidence thresholds
+compute_class_metrics_thresholds <- function(sf, cls, thresholds, palette) {
+  library(dplyr)
+  library(sf)
+  library(ggplot2)
+  
+ 
+  
+  # A helper function to compute area.
+  safe_area <- function(geom) {
+    if (length(geom) == 0 || all(st_is_empty(geom))) {
+      return(0)
+    } else {
+      return(as.numeric(st_area(geom)))
+    }
+  }
+  
+  # Iterate through each threshold and compute metrics.
+  results <- lapply(thresholds, function(th) {
+    # Ground truth (annotation) for this class.
+    gt <- sf %>%
+      filter(source == "annotation", classification == cls) %>%
+      st_union()
+    
+    # Predictions (ai) for this class with the current threshold filter.
+    pred <- sf %>%
+      filter(source == "ai",
+             classification == cls,
+             confidence_percentage >= th) %>%
+      st_union()
+    
+    # ROI geometry comes from the annotation row with classification "roi".
+    roi <- sf %>%
+      filter(source == "annotation", classification == "roi") %>%
+      st_union()
+    
+    # Compute intersection (TP) and differences (FN and FP).
+    TP_geom <- st_intersection(gt, pred)
+    FN_geom <- st_difference(gt, pred)
+    FP_geom <- st_difference(pred, gt)
+    
+    # TN: within the ROI, the area that is neither in gt nor in pred.
+    union_gt_pred <- st_union(gt, pred)
+    TN_geom <- st_difference(roi, union_gt_pred)
+    
+    # Compute areas.
+    TP <- safe_area(TP_geom)
+    FP <- safe_area(FP_geom)
+    FN <- safe_area(FN_geom)
+    TN <- safe_area(TN_geom)
+    
+    # Create a tibble of metrics including the current threshold.
+    metrics <- tibble(
+      threshold = th,
+      TP = TP,
+      FP = FP,
+      FN = FN,
+      TN = TN
+    )
+    
+    # Compute additional metrics, protecting against division by zero.
+    metrics <- metrics %>%
+      mutate(
+        sensitivity       = ifelse((TP + FN) > 0, TP / (TP + FN), NA_real_),
+        specificity       = ifelse((TN + FP) > 0, TN / (TN + FP), NA_real_),
+        ppv               = ifelse((TP + FP) > 0, TP / (TP + FP), NA_real_),
+        npv               = ifelse((TN + FN) > 0, TN / (TN + FN), NA_real_),
+        accuracy          = ifelse((TP + TN + FP + FN) > 0, (TP + TN) / (TP + TN + FP + FN), NA_real_),
+        f1_score          = ifelse((ppv + sensitivity) > 0, 2 * (ppv * sensitivity) / (ppv + sensitivity), NA_real_),
+        balanced_accuracy = ifelse(!is.na(sensitivity) & !is.na(specificity),
+                                    (sensitivity + specificity) / 2, NA_real_)
+      )
+    
+    return(metrics)
+  })
+  
+  # Combine all results into one tibble.
+  results_df <- bind_rows(results)
+  
+  # Calculate the False Positive Rate (FPR).
+  results_df <- results_df %>% mutate(fpr = 1 - specificity)
+  
+  # For plotting, only include rows with non-missing sensitivity and specificity.
+  plot_data <- results_df %>% filter(!is.na(sensitivity) & !is.na(specificity))
+  
+  # Create the plot.
+  p <- ggplot(plot_data, aes(x = fpr, y = sensitivity, color = factor(threshold))) +
+    geom_point(size = 4) +
+    scale_color_manual(values = metrics_palette) +  # Custom color palette
+    labs(x = "1 - Specificity",
+         y = "Sensitivity",
+         color = "AI confidence threshold (%)",
+         title = cls) +
+    theme_bw(base_family = "Arial") +  # Set base font to Arial
+    theme(text = element_text(size = 9, family = "Arial"))  # Set font size 9
+  
+  # Return both the metrics table and the plot.
+  return(list(metrics = results_df, plot = p))
+}
+
+```
+
+```{r}
+
+fragment_metadata_labl_2020_tuning <- fromJSON("~/Library/CloudStorage/Box-Box/Projects/fe_si_models/fragments/output/fragments/fragment_metadata_labl_2020_tuning.json") %>%
+  filter(classification == "included_fragment")
+
+```
+
+
+```{r, message=FALSE, warning=FALSE}
+image_fragment_names <- fromJSON("~/Library/CloudStorage/Box-Box/Projects/fe_si_models/layers/output/qupath_random_roi/image_fragments_name_random_rois_labl_2020_tuning.json")
+
+image_names <- unique(image_fragment_names$image_name)
+
+annotation_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/layers/output/qupath_export_layer_annotations/"
+annotations <- read_annotations_raw(annotation_dir, image_names) 
+
+
+```
+
+
+```{r}
+ai_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/combos/output/process_combos/" 
+ai_classes <- c("villi", "crypts")
+model_version <- "fe_si_layers_pv2_mv2/"
+
+ai_output <- NULL
+for (image in image_names){
+  fragments <-  image_fragment_names %>% filter(image_name == image)
+  fragment_names <- fragments$fragment_name
+  
+  for (fragment_name in fragment_names){
+    ai_output_fragment_path <- paste0(ai_dir, image, "_", fragment_name, "_layers.geojson")
+    
+    if (file.exists(ai_output_fragment_path)) {
+      
+      ai_output_fragment <- st_read(ai_output_fragment_path, quiet = TRUE) %>%
+        st_set_crs(0) %>%
+        mutate(source = "ai") %>%
+        select(image_name, fragment_name, classification, source, confidence_percentage, geometry)
+      
+      ai_output_fragment_converted <- convert_linestrings_to_polygons(ai_output_fragment)
+      ai_output <- bind_rows(ai_output, ai_output_fragment_converted)
+      
+    }
+    
+    
+  }
+}
+```
+
+```{r}
+#Function to read and parse ai output (this is slow)
+read_ai_output <- function(directory, image_names, classes, ai_model_name) {
+  output_sf <- image_names %>% 
+    map_dfr(function(img) {
+      message("Retrieving AI output for image: ", img, " with model: ", ai_model_name)
+      # Adjust pattern to match the file naming format: <image_name>_<ai_model_name>.geojson
+      pattern <- paste0("^", img, "_", ai_model_name, "\\.geojson$")
+      files <- list.files(path = directory, pattern = pattern, full.names = TRUE)
+      
+      if (length(files) > 0) {
+        map_dfr(files, function(file) {
+          st_read(file, quiet = TRUE) %>%
+            st_set_crs(0) %>%
+            filter(classification %in% classes) %>%
+            mutate(
+              image_name = img,
+              source = "ai"  # flag as AI output
+            ) %>%
+            select(image_name, classification, confidence_percentage, geometry, source)
+        })
+      } else {
+        message("No files found for image: ", img, " with AI model: ", ai_model_name)
+        tibble(
+          image_name = character(),
+          classification = character(),
+          confidence_percentage = numeric(),
+          geometry = st_sfc(),
+          source = character()
+        )
+      }
+    })
+  
+  output_sf <- st_as_sf(output_sf)
+  output_sf <- convert_linestrings_to_polygons(output_sf)
+  output_sf <- st_make_valid(output_sf)
+  
+  return(output_sf)
+}
+
+```
+
+```{r}
+subset_labl_2020_tuning <- fromJSON("~/Library/CloudStorage/Box-Box/Projects/fe_si_images/output/process_subset/subset_labl_2020_tuning.json")
+image_names <- subset_labl_2020_tuning$image_name
+
+model_version <- "fe_si_layers_pv2_mv2"
+
+roi_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/layers/output/qupath_random_roi/"
+
+
+
+
+
+
+
+output_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/layers/output/validate_layers/"
+
+
+
+
+
+
+```
+
+```{r}
+image_names_fragment_names <- rois %>%
+  st_drop_geometry() %>%
+  distinct(image_name, fragment_name)
+
+```
