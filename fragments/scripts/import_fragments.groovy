@@ -8,8 +8,8 @@ def entry = getProjectEntry()
 
 def imageName = entry.getImageName()
 
-def shortName = imageName.contains('.vsi') 
-    ? imageName.substring(0, imageName.indexOf('.vsi'))
+def shortName = imageName.contains('.') 
+    ? imageName.substring(0, imageName.indexOf('.')) 
     : imageName
 
 def fileName = "${shortName}_${className}.geojson"

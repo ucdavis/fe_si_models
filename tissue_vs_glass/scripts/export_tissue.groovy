@@ -39,15 +39,17 @@ project.getImageList().each { imageEntry ->
     	
     	
     	// Get the full image name
-		def imageName = imageEntry.getImageName()
+    	
+    	def imageName = imageEntry.getImageName()
 		
-		// Extract only the part before ".vsi" if it exists, otherwise use the entire name
-		def shortName = imageName.contains('.vsi') 
-    	? imageName.substring(0, imageName.indexOf('.vsi')) 
-    	: imageName
+	// Extract the part before any '.' character, otherwise use the entire name
+	
+	def shortName = imageName.contains('.')
+	? imageName.substring(0, imageName.indexOf('.'))
+	: imageName
     	
     	// Create a unique filename for the GeoJSON file
-		def fileName = "${shortName}_${className}_${index + 1}.geojson"
+	def fileName = "${shortName}_${className}_${index + 1}.geojson"
     	def outputPath = outputDir.resolve(fileName)
     
     	// Convert the annotation to GeoJSON

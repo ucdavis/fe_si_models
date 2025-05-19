@@ -24,6 +24,15 @@ library(writexl)
 
 to_box <- "~/Library/CloudStorage/Box-Box/"
 
+#to calculate area even if some geometries are empty
+safe_area <- function(geom) {
+    if (length(geom) == 0 || all(st_is_empty(geom))) {
+      return(0)
+    } else {
+      return(as.numeric(st_area(geom)))
+    }
+  }
+
 # occasionally annotations are not closed - and becomes linestrings instead of polygons. This function fixes that.
 convert_linestrings_to_polygons <- function(sf_df) {
   new_geoms <- lapply(st_geometry(sf_df), function(geom) {
@@ -53,7 +62,7 @@ convert_linestrings_to_polygons <- function(sf_df) {
 read_annotations_raw <- function(annotation_dir, image_names) {
   annotations <- image_names %>% 
     map_dfr(function(img) {
-      print(paste0("Retreiving annotation image ", img))
+      message("Retreiving annotation image ", img)
       pattern <- paste0("^", img, ".*\\.geojson$")
       files <- list.files(path = annotation_dir, pattern = pattern, full.names = TRUE)
       
@@ -188,26 +197,26 @@ process_roi <- function(combined_sf) {
         }
     
     # Create empty sf objects if the difference is nonempty.
-    if (!is.null(empty_geom_annotation) && length(empty_geom_annotation) > 0 &&
+    if (!is.null(empty_geom_annotation) && nrow(empty_geom_annotation) > 0 &&
         !st_is_empty(empty_geom_annotation)) {
       empty_annotation <- st_sf(
         image_name = img,
         classification = "empty",
         confidence_percentage = 100,
         source = "annotation",
-        geometry = empty_geom_annotation
+        geometry = empty_geom_annotation$geometry
         )
       cropped <- bind_rows(cropped, empty_annotation)
       }
     
-    if (!is.null(empty_geom_ai) && length(empty_geom_ai) > 0 &&
+    if (!is.null(empty_geom_ai) && nrow(empty_geom_ai) > 0 &&
         !st_is_empty(empty_geom_ai)) {
       empty_ai <- st_sf(
         image_name = img,
         classification = "empty",
         confidence_percentage = 100,
         source = "ai",
-        geometry = empty_geom_ai
+        geometry = empty_geom_ai$geometry
         )
       cropped <- bind_rows(cropped, empty_ai)
     }
@@ -289,6 +298,49 @@ explore_composition<- function(val_sf, class_palette) {
 }
 
 # Define function
+explore_ai_confidence_full <- function(sf_val, confidence_palette) {
+  
+  # Filter AI source 
+  data <- sf_val %>%
+    filter(source == "ai") %>%
+    mutate(area_px = safe_area(geometry))
+  
+  # Create confidence bins (10% intervals)
+  data$confidence_bin <- cut(data$confidence_percentage,
+                             breaks = seq(0, 100, by = 1),
+                             include.lowest = TRUE,
+                             right = FALSE,
+                             labels = paste(seq(0, 99, by = 1), seq(1, 100, by = 1), sep = "-"))
+
+  # Summarize total area per classification and confidence_bin
+  df_plot <- data %>%
+    group_by(classification, confidence_bin) %>%
+    summarise(total_area = sum(area_px, na.rm = TRUE), .groups = "drop") %>%
+    group_by(classification) %>%
+    mutate(percent_area = total_area / sum(total_area) * 100) %>%
+    ungroup()
+  
+  # Reorder confidence_bin within each classification so the largest is at the bottom
+  df_plot <- df_plot %>%
+    arrange(classification, desc(percent_area)) %>%
+    mutate(confidence_bin = factor(confidence_bin, levels = rev(unique(confidence_bin))))  # Reverse to put largest at bottom
+
+  # Generate the stacked bar plot
+  p <- ggplot(df_plot, aes(x = classification, y = percent_area, fill = confidence_bin)) +
+    geom_bar(stat = "identity") +
+    scale_y_continuous(labels = scales::percent_format(scale = 1)) +  # Format as percentage
+    scale_fill_manual(values = confidence_palette) +  # Apply custom colors
+    labs(x = "", y = "Percentage of total area", fill = "AI confidence %") +
+    theme_bw(base_family = "Arial") +  # Set base font to Arial
+    theme(
+      text = element_text(size = 9, family = "Arial"),  # Set font size 9
+      legend.position = "right"
+    )  # Combined into a single theme() call
+  
+  return(list(summary = df_plot, plot = p))  # Properly return the plot object
+}
+
+# Define function
 explore_ai_confidence <- function(sf_val, confidence_palette) {
   
   # Filter AI source 
@@ -297,10 +349,10 @@ explore_ai_confidence <- function(sf_val, confidence_palette) {
   
   # Create confidence bins (10% intervals)
   data$confidence_bin <- cut(data$confidence_percentage,
-                             breaks = seq(0, 100, by = 10),
+                             breaks = seq(0, 100, by = 1),
                              include.lowest = TRUE,
                              right = FALSE,
-                             labels = paste(seq(0, 90, by = 10), seq(10, 100, by = 10), sep = "-"))
+                             labels = paste(seq(0, 99, by = 1), seq(1, 100, by = 1), sep = "-"))
 
   # Summarize total area per classification and confidence_bin
   df_plot <- data %>%
@@ -475,15 +527,18 @@ compute_class_metrics_thresholds <- function(sf, cls, thresholds, palette) {
     # Compute additional metrics, protecting against division by zero.
     metrics <- metrics %>%
       mutate(
-        sensitivity       = ifelse((TP + FN) > 0, TP / (TP + FN), NA_real_),
-        specificity       = ifelse((TN + FP) > 0, TN / (TN + FP), NA_real_),
-        ppv               = ifelse((TP + FP) > 0, TP / (TP + FP), NA_real_),
-        npv               = ifelse((TN + FN) > 0, TN / (TN + FN), NA_real_),
-        accuracy          = ifelse((TP + TN + FP + FN) > 0, (TP + TN) / (TP + TN + FP + FN), NA_real_),
-        f1_score          = ifelse((ppv + sensitivity) > 0, 2 * (ppv * sensitivity) / (ppv + sensitivity), NA_real_),
+        sensitivity       = ifelse((TP + FN) > 0, round(100 * TP / (TP + FN), 1), NA_real_),
+        specificity       = ifelse((TN + FP) > 0, round(100 * TN / (TN + FP), 1), NA_real_),
+        ppv               = ifelse((TP + FP) > 0, round(100 * TP / (TP + FP), 1), NA_real_),
+        npv               = ifelse((TN + FN) > 0, round(100 * TN / (TN + FN), 1), NA_real_),
+        accuracy          = ifelse((TP + TN + FP + FN) > 0, round(100 * (TP + TN) / (TP + TN + FP + FN), 1), NA_real_),
+        f1_score          = ifelse((ppv + sensitivity) > 0,
+                               round(100 * (2 * (ppv / 100 * sensitivity / 100)) / ((ppv / 100) + (sensitivity / 100)), 1),
+                               NA_real_),
         balanced_accuracy = ifelse(!is.na(sensitivity) & !is.na(specificity),
-                                    (sensitivity + specificity) / 2, NA_real_)
-      )
+                               round((sensitivity + specificity) / 2, 1),
+                               NA_real_)
+  )
     
     return(metrics)
   })
@@ -492,21 +547,24 @@ compute_class_metrics_thresholds <- function(sf, cls, thresholds, palette) {
   results_df <- bind_rows(results)
   
   # Calculate the False Positive Rate (FPR).
-  results_df <- results_df %>% mutate(fpr = 1 - specificity)
+  results_df <- results_df %>% mutate(fpr = 100 - specificity)
   
   # For plotting, only include rows with non-missing sensitivity and specificity.
   plot_data <- results_df %>% filter(!is.na(sensitivity) & !is.na(specificity))
   
   # Create the plot.
   p <- ggplot(plot_data, aes(x = fpr, y = sensitivity, color = factor(threshold))) +
-    geom_point(size = 4) +
-    scale_color_manual(values = metrics_palette) +  # Custom color palette
-    labs(x = "1 - Specificity",
-         y = "Sensitivity",
-         color = "AI confidence threshold (%)",
-         title = cls) +
-    theme_bw(base_family = "Arial") +  # Set base font to Arial
-    theme(text = element_text(size = 9, family = "Arial"))  # Set font size 9
+    geom_jitter(size = 4, width = 1, height = 1) +  # Jitter points to reduce overplotting
+    scale_color_manual(values = palette) +          # Custom color palette
+    scale_x_continuous(limits = c(0, 100), expand = c(0, 0)) +  # Force x-axis 0–100
+    scale_y_continuous(limits = c(0, 100), expand = c(0, 0)) +  # Force y-axis 0–100
+    labs(x = "100 - Specificity",
+       y = "Sensitivity",
+       color = "AI confidence threshold (%)",
+       title = cls) +
+    theme_bw(base_family = "Arial") +
+    theme(text = element_text(size = 9, family = "Arial"))
+
   
   # Return both the metrics table and the plot.
   return(list(metrics = results_df, plot = p))
@@ -516,13 +574,6 @@ compute_class_metrics_thresholds <- function(sf, cls, thresholds, palette) {
 
 ```{r}
 
-fragment_metadata_labl_2020_tuning <- fromJSON("~/Library/CloudStorage/Box-Box/Projects/fe_si_models/fragments/output/fragments/fragment_metadata_labl_2020_tuning.json") %>%
-  filter(classification == "included_fragment")
-
-```
-
-
-```{r, message=FALSE, warning=FALSE}
 image_fragment_names <- fromJSON("~/Library/CloudStorage/Box-Box/Projects/fe_si_models/layers/output/qupath_random_roi/image_fragments_name_random_rois_labl_2020_tuning.json")
 
 image_names <- unique(image_fragment_names$image_name)
@@ -531,10 +582,6 @@ annotation_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/layers/o
 annotations <- read_annotations_raw(annotation_dir, image_names) 
 
 
-```
-
-
-```{r}
 ai_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/combos/output/process_combos/" 
 ai_classes <- c("villi", "crypts")
 model_version <- "fe_si_layers_pv2_mv2/"
@@ -550,88 +597,159 @@ for (image in image_names){
     if (file.exists(ai_output_fragment_path)) {
       
       ai_output_fragment <- st_read(ai_output_fragment_path, quiet = TRUE) %>%
-        st_set_crs(0) %>%
-        mutate(source = "ai") %>%
-        select(image_name, fragment_name, classification, source, confidence_percentage, geometry)
+        st_set_crs(0) 
       
-      ai_output_fragment_converted <- convert_linestrings_to_polygons(ai_output_fragment)
-      ai_output <- bind_rows(ai_output, ai_output_fragment_converted)
-      
+      if(nrow(ai_output_fragment) > 0){
+        ai_output_fragment <- ai_output_fragment %>%
+          mutate(source = "ai") %>%
+          select(image_name, fragment_name, classification, source, confidence_percentage, geometry)
+        
+        ai_output_fragment_converted <- convert_linestrings_to_polygons(ai_output_fragment)
+        ai_output <- bind_rows(ai_output, ai_output_fragment_converted)
+      }
     }
-    
-    
   }
 }
-```
 
-```{r}
-#Function to read and parse ai output (this is slow)
-read_ai_output <- function(directory, image_names, classes, ai_model_name) {
-  output_sf <- image_names %>% 
-    map_dfr(function(img) {
-      message("Retrieving AI output for image: ", img, " with model: ", ai_model_name)
-      # Adjust pattern to match the file naming format: <image_name>_<ai_model_name>.geojson
-      pattern <- paste0("^", img, "_", ai_model_name, "\\.geojson$")
-      files <- list.files(path = directory, pattern = pattern, full.names = TRUE)
-      
-      if (length(files) > 0) {
-        map_dfr(files, function(file) {
-          st_read(file, quiet = TRUE) %>%
-            st_set_crs(0) %>%
-            filter(classification %in% classes) %>%
-            mutate(
-              image_name = img,
-              source = "ai"  # flag as AI output
-            ) %>%
-            select(image_name, classification, confidence_percentage, geometry, source)
-        })
-      } else {
-        message("No files found for image: ", img, " with AI model: ", ai_model_name)
-        tibble(
-          image_name = character(),
-          classification = character(),
-          confidence_percentage = numeric(),
-          geometry = st_sfc(),
-          source = character()
-        )
-      }
-    })
+ai_output <- ai_output %>% select(-fragment_name)
   
-  output_sf <- st_as_sf(output_sf)
-  output_sf <- convert_linestrings_to_polygons(output_sf)
-  output_sf <- st_make_valid(output_sf)
-  
-  return(output_sf)
-}
 
+combined_sf <- bind_rows(annotations, ai_output)
+
+processed_by_roi <- process_roi(combined_sf)
+
+processed_by_roi_normalized <- process_val_sf(processed_by_roi)
+
+
+processed_by_roi_normalized_no_roi <- processed_by_roi_normalized %>%
+  filter(classification != "roi")
+
+
+class_palette <- c("crypts" = "#31a354", "villi" = "#a1d99b", "empty" = "grey")
+
+composition <- explore_composition(processed_by_roi_normalized_no_roi, class_palette)
+
+print(composition)
+
+bin_breaks <- c(0, 10, 20, 30, 40, 50, 60, 70,  80,  90, 100)
+bin_labels <- c("0-10", 
+                 "10-20",
+                 "20-30",
+                 "30-40",
+                 "40-50",
+                 "50-60",
+                 "60-70",
+                 "70-80",
+                 "80-90",
+                 "90-100")
+
+calibration <- explore_calibration(processed_by_roi_normalized_no_roi, "villi", bin_breaks, bin_labels)
+
+print(calibration)
+
+
+confidence_palette <- c("40-50" = "#feedde", 
+                        "50-60" = "#fdd0a2",
+                        "60-70" = "#fdae6b",
+                        "70-80" = "#fd8d3c",
+                        "80-90" = "#e6550d",
+                        "90-100" = "#a63603"
+                        )
+
+explored_confidence <- explore_ai_confidence(processed_by_roi_normalized_no_roi, confidence_palette)
+
+print(explored_confidence)
+
+thresholds <- c(40, 50, 60, 70, 80, 90)
+threshold_palette <- c("40" = "#feedde",
+                       "50" = "#fdd0a2",
+                       "60" = "#fdae6b",
+                       "70" = "#fd8d3c",
+                       "80" = "#e6550d",
+                       "90" = "#a63603")
+
+villi_metrics_by_threshold <- compute_class_metrics_thresholds(processed_by_roi_normalized, "villi", thresholds, threshold_palette)
+
+print(villi_metrics_by_threshold)
+
+thresholds <- c(40, 50, 60, 70, 80, 90)
+threshold_palette <- c("40" = "#feedde",
+                       "50" = "#fdd0a2",
+                       "60" = "#fdae6b",
+                       "70" = "#fd8d3c",
+                       "80" = "#e6550d",
+                       "90" = "#a63603")
+
+crypts_metrics_by_threshold <- compute_class_metrics_thresholds(processed_by_roi_normalized, "crypts", thresholds, threshold_palette)
+
+print(crypts_metrics_by_threshold)
+```
+
+
+```{r}
+
+
+bin_breaks <- c(0, 90, 91, 92, 93, 94, 95, 96,  97,  98, 99, 100, 101)
+bin_labels <- c("0-90", 
+                "90-91",
+                 "91-92",
+                 "92-93",
+                 "93-94",
+                 "94-95",
+                 "95-96",
+                "96-97",
+                 "97-98",
+                 "98-99",
+                 "99-100",
+                 "100")
+
+calibration <- explore_calibration(processed_by_roi_normalized, "villi", bin_breaks, bin_labels)
+
+print(calibration)
+
+calibration <- explore_calibration(processed_by_roi_normalized, "crypts", bin_breaks, bin_labels)
+
+print(calibration)
 ```
 
 ```{r}
-subset_labl_2020_tuning <- fromJSON("~/Library/CloudStorage/Box-Box/Projects/fe_si_images/output/process_subset/subset_labl_2020_tuning.json")
-image_names <- subset_labl_2020_tuning$image_name
+confidence_palette <- c("90-91" = "#543005",
+                        "91-92" = "#8c510a",
+                        "92-93" = "#bf812d",
+                        "93-94" = "#dfc27d",
+                        "94-95" = "#f6e8c3",
+                        "95-96" = "#c7eae5",
+                        "96-97" = "#80cdc1",
+                        "97-98" = "#35978f",
+                        "98-99" = "#01665e",
+                        "99-100" = "#003c30"
+                        )
 
-model_version <- "fe_si_layers_pv2_mv2"
-
-roi_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/layers/output/qupath_random_roi/"
-
-
-
-
-
-
-
-output_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/layers/output/validate_layers/"
-
-
-
-
-
-
+explored_confidence <- explore_ai_confidence_full(ai_output, confidence_palette)
+print(explored_confidence)
 ```
 
 ```{r}
-image_names_fragment_names <- rois %>%
-  st_drop_geometry() %>%
-  distinct(image_name, fragment_name)
 
+
+thresholds <- c(90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100)
+threshold_palette <- c("90" = "#67001f",
+                       "91" = "#b2182b",
+                       "92" = "#d6604d",
+                       "93" = "#f4a582",
+                       "94" = "#fddbc7",
+                       "95" = "#f7f7f7",
+                       "96" = "#d1e5f0",
+                       "97" = "#92c5de",
+                       "98" = "#4393c3",
+                       "99" = "#2166ac",
+                       "100" = "#053061")
+
+villi_metrics_by_threshold <- compute_class_metrics_thresholds(processed_by_roi_normalized, "villi", thresholds, threshold_palette)
+
+print(villi_metrics_by_threshold)
+
+crypts_metrics_by_threshold <- compute_class_metrics_thresholds(processed_by_roi_normalized, "crypts", thresholds, threshold_palette)
+
+print(crypts_metrics_by_threshold)
 ```

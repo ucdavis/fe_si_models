@@ -1,0 +1,35 @@
+---
+title: "si_fragments"
+author: "Wulcan"
+date: "2025-05-16"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Objective
+Identify small intestinal fragments based on villi and crypts
+
+```{r}
+library(tidyverse)
+library(sf)
+library(jsonlite)
+
+subset_labl_2020_tuning <- fromJSON("~/Library/CloudStorage/Box-Box/Projects/fe_si_images/output/process_subset/subset_labl_2020_tuning.json")
+
+image_names <- subset_labl_2020_tuning$image_name
+
+fragment_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/fragments/output/fragments/"
+
+for (image in image_names[1]){
+  fragment_path <- paste0(fragment_dir, image, "_fragments.geojson")
+  fragments <- st_read(fragment_path, quiet = TRUE) %>%
+    st_set_crs(0)
+  
+  for (frag in 1:nrow(fragments)){
+    fragment = 
+  }
+}
+```

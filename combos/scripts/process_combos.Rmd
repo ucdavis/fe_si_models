@@ -34,11 +34,12 @@ library(sf)
 Sys.setenv(OGR_GEOJSON_MAX_OBJ_SIZE = 0)
 
 to_box <- "~/Library/CloudStorage/Box-Box/"
+#to_box <- "C:/Users/15303/Box/" #JMW lenovo
 
 #This function takes a vector of image names and arranges them by file size for a model_version output
 arrange_image_names <- function(image_names, model_version, combos_dir){
   #Expected file names
-  expected_files <- paste(image_names, model_version, "sep.geojson", sep = "_")
+  expected_files <- paste(image_names, model_version, "processed_ia_results.geojson", sep = "_")
   
   #List actual files in directory
   actual_files <- list.files(combos_dir)
@@ -50,13 +51,13 @@ arrange_image_names <- function(image_names, model_version, combos_dir){
   downloaded_image_files <- data.frame(
     image_name = character(),
     file_path = character(),
-    files_size_mb = numeric(),
+    file_size_mb = numeric(),
     stringsAsFactors = FALSE
   )
   
   #Populate df
   for (image in downloaded_image_results){
-    file_path <- paste0(combos_dir, image, "_", model_version, "_sep.geojson")
+    file_path <- paste0(combos_dir, image, "_", model_version, "_processed_ia_results.geojson")
     
     #Get file size in MB
     file_size_mb <- file.info(file_path)$size / (1024^2)
@@ -104,7 +105,13 @@ process_image_fragments <- function(image_names, model_version, combos_dir, frag
     file_data <- arranged_images %>% filter(image_name == image)
 
     image_combos <- st_read(file_data$file_path, quiet = TRUE) %>%
-      st_set_crs(0)
+      st_set_crs(0) %>%
+      #add confidence pct to name
+      mutate(
+        name = paste0(
+          str_replace_all(tolower(name), " ", "_"),
+          "_conf_pct_",
+          round(confidence_percentage)))
 
     image_layers <- image_combos %>%
       filter(classification %in% c("villi", "crypts"))
@@ -119,7 +126,7 @@ process_image_fragments <- function(image_names, model_version, combos_dir, frag
 
     image_fragments <- st_read(fragment_path, quiet = TRUE) %>%
       st_set_crs(0) %>%
-      filter(classification == "included_fragment") %>%
+      #filter(classification == "included_fragment") %>%
       rename(fragment_name = name) %>%
       select(-classification, -exclusion_reason, -id, -included)
 
@@ -177,7 +184,7 @@ process_image_fragments <- function(image_names, model_version, combos_dir, frag
 Processes image fragments for labl_2020 tuning image if the results for the corresponding model has been downloaded
 ####  Input
 - subset_labl_2020_tuning.json (fe_si_images/output/process_subset/)
-- *<image_name>_fe_si_combos_pv2_mv2_sep.geojson* (fe_si_models/combos/output/fe_si_combos_pv2_mv2/)
+- *<image_name>_fe_si_combos_pv2_mv2_processed_ia_results.geojson.geojson* (fe_si_models/combos/output/fe_si_combos_pv2_mv2/)
 Results downloaded from aiforia and processed with "get_image_analysis_results.Rmd" (aiforia/scripts)
 - *<image_name>_fragments.geojson*(fe_si_models/fragments/output/fragments/)
 fragment cooridnates 
@@ -188,23 +195,94 @@ fragment cooridnates
 - *<image_name>_<fragment_name>_tissues.geojson*
 - *<image_name>_<fragment_name>_lymphocytes.geojson*
 
+#### Issues/Deviations
+Got errors when processing the larger images on PC (lenovo) but not on macbook
+
 ```{r, message=FALSE, warning=FALSE}
-subset_labl_2020_tuning <- fromJSON("~/Library/CloudStorage/Box-Box/Projects/fe_si_images/output/process_subset/subset_labl_2020_tuning.json")
+subset_labl_2020_tuning <- fromJSON(paste0(to_box,"Projects/fe_si_images/output/process_subset/subset_labl_2020_tuning.json"))
 
 image_names <- subset_labl_2020_tuning$image_name
 
 model_version <- "fe_si_combos_pv2_mv2"
 
-combos_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/combos/output/fe_si_combos_pv2_mv2/"
+combos_dir <- paste0(to_box, "Projects/fe_si_models/combos/output/aiforia_ia_results/")
 
-arranged_images <- arrange_image_names(image_names, model_version, combos_dir)
+fragments_dir <- paste0(to_box, "Projects/fe_si_models/fragments/output/fragments/")
 
-fragment_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/fragments/output/fragments/"
+output_dir <- paste0(to_box, "Projects/fe_si_models/combos/output/process_combos/")
 
-output_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/combos/output/process_combos/"
 
-process_image_fragments(image_names, model_version, combos_dir, fragment_dir, output_dir)
+process_image_fragments(image_names, model_version, combos_dir, fragments_dir, output_dir)
 ```
 
 
+### Process image fragment for labl_2020_training model fe_si_combos_pv2_mv2
+Processes image fragments for labl_2020 training image if the results for the corresponding model has been downloaded
+####  Input
+- subset_labl_2020_training.json (fe_si_images/output/process_subset/)
+- *<image_name>_fe_si_combos_pv2_mv2_processed_ia_results.geojson* (fe_si_models/combos/output/fe_si_combos_pv2_mv2/)
+Results downloaded from aiforia and processed with "get_image_analysis_results.Rmd" (aiforia/scripts)
+- *<image_name>_fragments.geojson*(fe_si_models/fragments/output/fragments/)
+fragment cooridnates 
 
+#### Output
+- *<image_name>_<fragment_name>_fragment.geojson*
+- *<image_name>_<fragment_name>_layers.geojson*
+- *<image_name>_<fragment_name>_tissues.geojson*
+- *<image_name>_<fragment_name>_lymphocytes.geojson*
+
+#### Issues/Deviations
+
+
+```{r, message=FALSE, warning=FALSE}
+subset_labl_2020_training <- fromJSON(paste0(to_box,"Projects/fe_si_images/output/process_subset/subset_labl_2020_training.json"))
+
+image_names <- subset_labl_2020_training$image_name
+
+model_version <- "fe_si_combos_pv2_mv2"
+
+combos_dir <- paste0(to_box, "Projects/fe_si_models/combos/output/aiforia_ia_results/")
+
+fragments_dir <- paste0(to_box, "Projects/fe_si_models/fragments/output/fragments/")
+
+output_dir <- paste0(to_box, "Projects/fe_si_models/combos/output/process_combos/")
+
+
+process_image_fragments(image_names, model_version, combos_dir, fragments_dir, output_dir)
+```
+
+### Process image fragment for labl_2025_clonality model fe_si_combos_pv2_mv2
+Processes image fragments for labl_2025 clonality image if the results for the corresponding model has been downloaded
+
+####  Input
+- subset_labl_2025_clonality.json (fe_si_images/output/process_subset/)
+- *<image_name>_fe_si_combos_pv2_mv2_processed_ia_results.geojson* (fe_si_models/combos/output/fe_si_combos_pv2_mv2/)
+Results downloaded from aiforia and processed with "get_image_analysis_results.Rmd" (aiforia/scripts)
+- *<image_name>_fragments.geojson*(fe_si_models/fragments/output/fragments/)
+fragment coordinates 
+
+#### Output
+- *<image_name>_<fragment_name>_fragment.geojson*
+- *<image_name>_<fragment_name>_layers.geojson*
+- *<image_name>_<fragment_name>_tissues.geojson*
+- *<image_name>_<fragment_name>_lymphocytes.geojson*
+
+#### Issues/Deviations
+Processed both "included" and "duplicate" fragment because that labels doesn't work as well for this subset
+
+```{r, message=FALSE, warning=FALSE}
+subset_labl_2025_clonality <- fromJSON(paste0(to_box,"Projects/fe_si_images/output/process_subset/subset_labl_2025_clonality.json"))
+
+image_names <- subset_labl_2025_clonality$image_name
+
+model_version <- "fe_si_combos_pv2_mv2"
+
+combos_dir <- paste0(to_box, "Projects/fe_si_models/combos/output/aiforia_ia_results/")
+
+fragments_dir <- paste0(to_box, "Projects/fe_si_models/fragments/output/fragments/")
+
+output_dir <- paste0(to_box, "Projects/fe_si_models/combos/output/process_combos/")
+
+
+process_image_fragments(image_names, model_version, combos_dir, fragments_dir, output_dir)
+```
