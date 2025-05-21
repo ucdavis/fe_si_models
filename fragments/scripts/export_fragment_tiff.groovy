@@ -5,13 +5,12 @@ import qupath.lib.images.writers.ImageWriterTools
 def imageData = getCurrentImageData()
 def server = imageData.getServer()
 def imageName = server.getMetadata().getName().split("\\.")[0] 
-def annotations = getAnnotationObjects().findAll { it.getPathClass()?.toString() == "included_fragment" }
+def annotations = getAnnotationObjects().findAll { it.getPathClass()?.toString() == "included" }
 
 def homeDir = System.getProperty('user.home')
 def outputDir = buildFilePath(homeDir,
-    'Library', 'Cloudstorage', 'Box-Box',
-    'Projects', 'fe_si_models', 'fragments', 
-    'output', 'qupath_fragments')
+    'Box', 'Projects', 'fe_si_samples',
+    'labl_2025_clonality', 'output', 'qupath_fragments')
     
 
 annotations.each { annotation ->
