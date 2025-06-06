@@ -12,6 +12,9 @@ by "tissue_vs_glass" as input and outputting fragment polygons.
 This script processes tissue polygons to fragments
 - **import_fragments.groovy** 
 This script imports fragments to qupath
+- **validate_fragments**
+This script assess fragment performance (both for identifying single fragments and
+for identifying duplicated fragments)
 
 ## Training & tuning
 Parameters for the model were set by testing different settings in the images 
