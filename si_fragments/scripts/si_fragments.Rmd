@@ -16,20 +16,99 @@ Identify small intestinal fragments based on villi and crypts
 library(tidyverse)
 library(sf)
 library(jsonlite)
+library(writexl)
 
-subset_labl_2020_tuning <- fromJSON("~/Library/CloudStorage/Box-Box/Projects/fe_si_images/output/process_subset/subset_labl_2020_tuning.json")
+subset_fe_si_layers_pv6_tuning <- fromJSON("~/Library/CloudStorage/Box-Box/Projects/fe_si_images/output/process_subset/subset_fe_si_layers_pv6_tuning.json")
 
-image_names <- subset_labl_2020_tuning$image_name
+image_names <- subset_fe_si_layers_pv6_tuning$image_name
+
 
 fragment_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/fragments/output/fragments/"
+layers_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/combos/output/process_combos/"
+output_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/si_fragments/output/si_fragments/"
 
-for (image in image_names[1]){
+layer_files <- list.files(layers_dir)
+#filter for files with layers file
+matching_image_names <- image_names[ sapply(image_names, function(name) {
+  any(startsWith(layer_files, name))
+}) ]
+
+si_fragment_template <- NULL
+for (image in matching_image_names){
   fragment_path <- paste0(fragment_dir, image, "_fragments.geojson")
   fragments <- st_read(fragment_path, quiet = TRUE) %>%
-    st_set_crs(0)
+    st_set_crs(0) %>%
+    select(id:name, geometry)
   
-  for (frag in 1:nrow(fragments)){
-    fragment = 
+  fragment_names <- fragments$name
+  
+  included_fragments <- fragments %>% filter(classification == "included_fragment")
+  
+  fragment_names <- included_fragments$name
+  
+  duplicate_fragments <- fragments %>% filter(classification == "duplicate_fragment") %>%
+    mutate(classification = "duplicate")
+  
+  si_fragments <- duplicate_fragments
+  
+  for (frag in fragment_names){
+    fragment <- fragments %>% filter(name == frag)
+    
+    layer_path <- paste0(layers_dir,image, "_", frag, "_layers.geojson")
+    
+  
+    layers <- st_read(layer_path, quiet = TRUE) %>%
+      st_set_crs(0)
+    
+    if (nrow(layers) == 0) {
+      layer_flags <- fragment %>%
+        st_drop_geometry() %>%
+        mutate(si = "no_si") %>%
+        select(name, si)
+      } else {
+        
+        layer_flags <- layers %>%
+          st_drop_geometry() %>%
+          select(-name) %>%
+          rename(name = fragment_name) %>%
+          group_by(name) %>%
+          summarise(
+            has_crypts = any(classification == "crypts"),
+            has_villi = any(classification == "villi"),
+            .groups = "drop"
+            ) %>%
+          
+          mutate(
+            si = case_when(
+              has_crypts & has_villi ~ "si",
+              has_crypts & !has_villi ~ "crypts_only",
+              !has_crypts & has_villi ~ "villi_only",
+              TRUE ~ "no_si"))
+        }
+    si_fragment <- fragment %>%
+      left_join(layer_flags %>% select(name, si), by = "name") %>%
+      mutate(si = replace_na(si, "no_si")) %>%
+      mutate(classification = case_when(
+                                        classification == "included_fragment" & si == "crypts_only" ~ "crypts_only",
+                                        classification == "included_fragment" & si == "villi_only" ~ "villi_only",
+                                        classification == "included_fragment" & si == "no_si" ~ "no_si",
+                                        classification == "duplicated_fragment" ~ "duplicate",
+                                        TRUE ~ classification)) %>%
+    select(id:name, geometry)
+    
+    si_fragments <- bind_rows(si_fragments, si_fragment)
+  
   }
+  
+  st_write(si_fragments, paste0(output_dir, image, "_si_fragments.geojson"), quiet = TRUE, delete_dsn = TRUE)
+  template <- si_fragments %>%
+    st_drop_geometry() %>%
+    rename(fragment_name = name) %>%
+    select(image_name, fragment_name, classification)
+  
+  si_fragment_template <- bind_rows(si_fragment_template, template)
+
 }
+
+write_xlsx(si_fragment_template, paste0(output_dir, "si_fragments_template.xlsx"))
 ```

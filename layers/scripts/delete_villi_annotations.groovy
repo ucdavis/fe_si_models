@@ -5,6 +5,8 @@ import qupath.lib.projects.Project
 // Get the current project
 def project = QP.getProject()
 
+def classesToDelete = ["villi", "crypts"]
+
 // Loop through all images in the project
 project.getImageList().each { imageEntry ->
     // Load the image data for the current entry
@@ -17,8 +19,7 @@ project.getImageList().each { imageEntry ->
     // Filter annotations with classification "content"
     def annotationsToDelete = annotations.findAll { annotation ->
         def pathClass = annotation.getPathClass()
-        // Ensure that a classification exists and compare name (ignoring case)
-        pathClass != null && pathClass.getName().equalsIgnoreCase("villi")
+        pathClass != null && classesToDelete.any { it.equalsIgnoreCase(pathClass.getName()) }
     }
     
     // Remove filtered annotations if any exist
