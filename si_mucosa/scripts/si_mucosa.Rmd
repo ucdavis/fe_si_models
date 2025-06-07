@@ -1,0 +1,612 @@
+---
+title: "si_mucosa_orientation"
+author: "Wulcan"
+date: "2025-05-24"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Objective
+The objective of this model is to identify regions of small intestinal mucosa 
+in tissue fragments. 
+
+### Issues
+If no si mucosa > 100% it gets filtered out completely - I want to keep it but labelled no_si_mucosa I think
+```{r, message=FALSE, warning=FALSE}
+
+library(tidyverse)
+library(sf)
+library(jsonlite)
+library(writexl)
+library(readxl)
+
+fragment_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/fragments/output/fragments/"
+combos_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/combos/output/combos/"
+output_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/si_mucosa/output/si_mucosa/"
+
+#Read tuning set
+subset_fe_si_layers_pv6_tuning <- fromJSON("~/Library/CloudStorage/Box-Box/Projects/fe_si_images/output/process_subset/subset_labl_2020_tuning.json")
+
+
+#read fragment list
+fragment_list <- fromJSON("~/Library/CloudStorage/Box-Box/Projects/fe_si_models/fragments/output/validate_fragments/corrected_fragments_labl_2020_tuning.json") %>%
+  filter(classification == "included_fragment")
+
+image_names <- unique(fragment_list$image_name)
+
+image_fragment_names <- paste(fragment_list$image_name, fragment_list$fragment_name, sep = "_")
+
+
+#Filter on have ia results
+layer_files <- list.files(combos_dir)
+#filter for files with layers file
+matching_image_fragment_names <- image_fragment_names[ sapply(image_fragment_names, function(name) {
+  any(startsWith(layer_files, name))
+}) ]
+
+templates_all  <- NULL
+
+for (image_fragment in matching_image_fragment_names[465:828]){
+  
+  split_matrix <- str_split_fixed(image_fragment, "_", 2)
+  img <- split_matrix[, 1]
+  frag<- split_matrix[, 2]
+  
+  image_metadata <- subset_fe_si_layers_pv6_tuning %>% filter(image_name == img)
+  pixel_area_um2 <- image_metadata$pixel_area_um2
+  pixel_length_um <- image_metadata$pixel_length_um
+  
+  layer_path <- paste0(combos_dir, image_fragment, "_layers.geojson")
+  
+  layers <- st_read(layer_path, quiet = TRUE) %>%
+    st_set_crs(0) 
+  
+  
+  
+  if (nrow(layers) == 0) {
+    
+    fragment_path <- paste0(fragment_dir, img, "_fragments.geojson")
+    si_mucosa <- st_read(fragment_path, quiet = TRUE) %>%
+      st_set_crs(0)%>%
+      filter(name == frag) %>%
+      rename(fragment_name = name) %>%
+      mutate(mucosa_name = "00",
+             name = paste(image_name, fragment_name, sep="_"),
+             classification = "no_si_mucosa",
+             area_1000_um2 = fragment_area_um2 / 1000) %>%
+      select(image_name, fragment_name, mucosa_name, name, classification, area_1000_um2, geometry)
+    
+    } else {
+  
+      si_mucosa <- layers %>%
+        group_by(image_name, fragment_name, objectType, isLocked) %>%
+        mutate(confidence_percentage = round(confidence_percentage)) %>%
+        filter(confidence_percentage == 100) %>%
+        summarise(geometry = st_union(geometry)) %>%
+        st_cast("POLYGON") %>%
+        ungroup() %>%
+        mutate(
+          classification = "si_mucosa",
+          area_px2 = st_area(geometry),
+          area_um2 = area_px2 * pixel_area_um2,
+          area_1000_um2 = area_um2 / 1000) %>%
+        filter(area_1000_um2 > 100) %>%
+        mutate(
+          mucosa_name = str_pad(rank(-area_px2, 
+                                     ties.method = "first"), 
+                                width = 2, 
+                                pad = "0"),
+          name = paste(img, frag, mucosa_name, sep = "_")) %>%
+        select(image_name, fragment_name, mucosa_name, name, classification, area_1000_um2)
+    
+    }
+  
+  st_write(si_mucosa, paste0(output_dir, image_fragment, "_si_mucosa.geojson"), quiet = TRUE, delete_dsn = TRUE)
+  
+  template <- si_mucosa %>% st_drop_geometry()
+  
+  templates_all <- bind_rows(templates_all, template)
+    
+}
+
+
+
+```
+
+```{r}
+fragment_list_comment <- fragment_list %>%
+  select(image_name, fragment_name, comment)
+
+templates_all <- templates_all %>%
+  left_join(fragment_list_comment)
+
+write_xlsx(templates_all, paste0(output_dir, "templates_si_mucosa.xlsx"))
+```
+
+## Input
+-*<image_name>_fragments.geojson*
+-*image_name>_<fragment_name>_layers.geojson*
+
+## Output
+- *<image_name>_<fragment_name>_<mucosa_name>_si_mucosa_orientation.geojson*
+
+## Parameters
+The thresholds were set by examining proportions in fragments in the tuning set. 
+
+Performance was evauluate by inspecting the tuning set (only incorrect labels documented) and documented here: https://docs.google.com/spreadsheets/d/1yd_yRu5BlewXfkpWqm7iU-oXL4VxJQcVr0TTOBoNTPY/edit?usp=sharing
+with examples here: https://docs.google.com/presentation/d/1DXAzfuI3s2T7yXSY5XOSxSZTdDFm8SWEf1zP4o9WkXU/edit?usp=sharing
+
+## Issues /Comments / Deviations
+- This leverages the layers model (crypts vs villi) and is not designed to differentiate small intestine from other tissues. The hope is however that other tissues would generally fall in the "inadequate" category and be able to be filtered out with that prior to further processing.
+- 
+
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(sf)
+library(jsonlite)
+library(writexl)
+library(readxl)
+
+subset_fe_si_layers_pv6_tuning <- fromJSON("~/Library/CloudStorage/Box-Box/Projects/fe_si_images/output/process_subset/subset_fe_si_layers_pv6_tuning.json")
+
+image_names <- subset_fe_si_layers_pv6_tuning$image_name
+
+
+fragment_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/fragments/output/fragments/"
+layers_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/combos/output/combos/"
+output_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/si_mucosa/output/si_mucosa_orientation/"
+
+layer_files <- list.files(layers_dir)
+#filter for files with layers file
+matching_image_names <- image_names[ sapply(image_names, function(name) {
+  any(startsWith(layer_files, name))
+}) ]
+
+si_mucosa_template <- NULL
+for (image in matching_image_names){
+  
+  image_metadata <- subset_fe_si_layers_pv6_tuning %>% filter(image_name == image)
+  pixel_area_um2 <- image_metadata$pixel_area_um2
+  pixel_length_um <- image_metadata$pixel_length_um
+  
+  fragment_path <- paste0(fragment_dir, image, "_fragments.geojson")
+  fragments <- st_read(fragment_path, quiet = TRUE) %>%
+    st_set_crs(0) %>%
+    filter(classification == "included_fragment") %>%
+    select(id:name, geometry)
+  
+  fragment_names <- fragments$name
+  
+  for (frag in fragment_names){
+    
+    fragment <- fragments %>% filter(name == frag) %>%
+      mutate(area_px2 = st_area(geometry),
+             area_um2 = area_px2 * pixel_area_um2)
+    
+    fragment_area_um2 <- fragment$area_um2
+
+    
+    layer_path <- paste0(layers_dir,image, "_", frag, "_layers.geojson")
+    
+  
+    layers <- st_read(layer_path, quiet = TRUE) %>%
+      st_set_crs(0) 
+    
+    if (nrow(layers) == 0) {
+      si_mucosa <- data.frame(
+        image_name = character(), 
+        fragment_name = character(), 
+        name = character(), 
+        classification = character(),
+        area_1000_um2 = numeric(), 
+        pct_high_confidence_villi = numeric(), 
+        pct_high_confidence_crypts = numeric())
+    } else {
+      
+      si_mucosa <- layers %>%
+        group_by(image_name, fragment_name, objectType, isLocked) %>%
+        mutate(confidence_percentage = round(confidence_percentage)) %>%
+        summarise(geometry = st_union(geometry)) %>%
+        st_cast("POLYGON") %>%
+        ungroup() %>%
+        mutate(
+          area_px2 = st_area(geometry),
+          area_um2 = area_px2 * pixel_area_um2,
+          area_1000_um2 = area_um2 / 1000) %>%
+        filter(area_1000_um2 > 100) %>%
+        mutate(
+          mucosa_name = str_pad(rank(-area_px2, 
+                                     ties.method = "first"), 
+                                width = 2, 
+                                pad = "0"),
+          name = paste("fragment", frag, "mucosa", mucosa_name, sep = "_")) 
+    
+    intersection_df <- layers %>%
+      mutate(confidence_percentage = round(confidence_percentage)) %>%
+      select(classification, confidence_percentage, geometry) %>%
+      st_intersection(si_mucosa %>% select(name, geometry)) %>%
+      mutate(area_intersect_px2 = st_area(geometry),
+             area_intersect_um2 = area_intersect_px2 * pixel_area_um2)
+    
+    summary_stats <- intersection_df %>%
+      st_drop_geometry() %>%
+      group_by(name) %>%
+      summarise(
+        total_area = sum(area_intersect_um2),
+        villi_area = sum(area_intersect_um2[classification == "villi"], na.rm = TRUE),
+        crypt_area = sum(area_intersect_um2[classification == "crypts"], na.rm = TRUE),
+        villi_area_high_confidence = sum(area_intersect_um2[classification == "villi" & confidence_percentage == 100], na.rm = TRUE),
+        crypt_area_high_confidence = sum(area_intersect_um2[classification == "crypts" & confidence_percentage == 100], na.rm = TRUE)) %>%
+      mutate(
+        pct_high_confidence_villi = ifelse(villi_area > 0, (villi_area_high_confidence /
+                                                      total_area) * 100, 0),
+        pct_high_confidence_crypts = ifelse(crypt_area > 0, (crypt_area_high_confidence /
+                                                       total_area) * 100, 0)
+        ) %>%
+      select(name, pct_high_confidence_villi, pct_high_confidence_crypts)
+    
+    si_mucosa <- si_mucosa %>%
+      left_join(summary_stats, by = "name") %>%
+      mutate(
+             classification = case_when(
+               pct_high_confidence_villi < 15 ~ "inadequate_orientation",
+               pct_high_confidence_crypts < 15 ~ "inadequate_orientation",
+               TRUE ~ "included_si_mucosa")) %>%
+      select(image_name, fragment_name, name, classification, objectType, isLocked, area_1000_um2, pct_high_confidence_villi, pct_high_confidence_crypts)
+    
+    st_write(si_mucosa, paste0(output_dir, image, "_", frag, "_si_mucosa.geojson"), 
+             quiet = TRUE, delete_dsn = TRUE)
+    }
+    
+    template <- si_mucosa %>% 
+      st_drop_geometry() %>%
+      select(image_name, fragment_name, name, classification, area_1000_um2, pct_high_confidence_villi, pct_high_confidence_crypts)
+    
+    si_mucosa_template <- bind_rows(si_mucosa_template, template)
+  
+    
+    }
+}
+
+si_mucosa_template <- si_mucosa_template %>%
+  mutate(image_name_order = match(image_name, unique(image_name))) %>%
+  arrange(image_name_order, name) %>%
+  select(-image_name_order)
+
+write_xlsx(si_mucosa_template, paste0(output_dir, "si_mucosa_template.xlsx"))
+```
+
+
+### assess
+```{r}
+subset_fe_si_layers_pv6_tuning <- fromJSON("~/Library/CloudStorage/Box-Box/Projects/fe_si_images/output/process_subset/subset_fe_si_layers_pv6_tuning.json")
+
+image_names <- subset_fe_si_layers_pv6_tuning$image_name
+
+
+fragment_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/fragments/output/fragments/"
+layers_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/combos/output/process_combos/"
+output_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/si_mucosa/output/si_mucosa/"
+
+layer_files <- list.files(layers_dir)
+#filter for files with layers file
+matching_image_names <- image_names[ sapply(image_names, function(name) {
+  any(startsWith(layer_files, name))
+}) ]
+
+
+
+
+
+reviewed <- read_xlsx("~/Library/CloudStorage/Box-Box/Projects/fe_si_models/si_mucosa/input/si_mucosa_reviewed_3.xlsx") %>%
+  mutate(confusion_matrix = 
+           case_when((classification == "included_si_mucosa" & is.na(correction)) ~ "TP",
+                  (classification != "included_si_mucosa" & is.na(correction)) ~ "TN",
+                  (classification == "included_si_mucosa" & correction == "FP") ~ "FP",
+                  classification != "included_si_mucosa" & correction == "FN" ~ "FN",
+                  TRUE ~ NA))
+
+# Count each confusion matrix category
+conf_counts <- table(reviewed$confusion_matrix)
+
+TP <- conf_counts["TP"]
+TN <- conf_counts["TN"]
+FP <- conf_counts["FP"]
+FN <- conf_counts["FN"]
+
+# Replace NA with 0 if any of these are missing
+TP <- ifelse(is.na(TP), 0, TP)
+TN <- ifelse(is.na(TN), 0, TN)
+FP <- ifelse(is.na(FP), 0, FP)
+FN <- ifelse(is.na(FN), 0, FN)
+
+# Metrics
+sensitivity <- TP / (TP + FN)
+specificity <- TN / (TN + FP)
+ppv <- TP / (TP + FP)  # Positive Predictive Value (Precision)
+accuracy <- (TP + TN) / (TP + TN + FP + FN)
+balanced_accuracy <- (sensitivity + specificity) / 2
+f1_score <- 2 * (ppv * sensitivity) / (ppv + sensitivity)
+
+# Combine into a data frame for viewing
+metrics <- data.frame(
+  Sensitivity = sensitivity,
+  Specificity = specificity,
+  PPV = ppv,
+  Accuracy = accuracy,
+  Balanced_Accuracy = balanced_accuracy,
+  F1_Score = f1_score
+)
+                      
+```
+
+### DRAFT ORIENTATION / ARTEFACT
+for each included mucosa_fragment_part add
+- pct_villi_abuts_crypts - marker for optimal orientation?
+- pct_crypts_abuts_villi - marker for optimal orientation?
+- pct_villi_epithelium_lumen_or_lp - marker for artefact?
+- pct_crypts_epithelium_lumen_or_lp - marker for artefact?
+- pct_villi_epithelium - marker for artefact?
+- pct_villi_lp - marker for artefact?
+- pct_crypts_epithelium - marker for artefact?
+= pct_crypts_lp - marker for artefact?
+
+```{r}
+layers_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/combos/output/combos/"
+mucosa_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/si_mucosa/output/si_mucosa/"
+
+output_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/si_mucosa/output/orientation/"
+
+included <- reviewed %>% filter(classification == "included_si_mucosa") %>%
+  mutate(image_fragment_name = paste(image_name, fragment_name, sep = "_"))
+
+subset_fe_si_layers_pv6_tuning_included <- subset_fe_si_layers_pv6_tuning %>%
+  filter(image_name %in% included$image_name) %>% 
+  select(image_name, pixel_length_um, pixel_area_um2)
+
+# Merge the dataframes by image_name, keeping all rows from 'included'
+merged_df <- included %>%
+  left_join(subset_fe_si_layers_pv6_tuning_included, by = "image_name") %>%
+  # Arrange to keep the order of image_name as in subset_fe_si_layers_pv6_tuning_included
+  mutate(image_name = factor(image_name, levels = unique(subset_fe_si_layers_pv6_tuning_included$image_name))) %>%
+  arrange(image_name, name) %>%
+  mutate(mucosa_name = str_extract(name, "\\d+$"),
+         image_fragment_mucosa_name = paste(image_name, fragment_name, mucosa_name, sep = "_")) %>%
+  select(image_fragment_mucosa_name, image_name, fragment_name, mucosa_name, name, pixel_length_um, pixel_area_um2, area_1000_um2, confusion_matrix, comment)
+
+image_fragment_mucosa_names <- merged_df$image_fragment_mucosa_name 
+
+templates_all <- NULL
+
+for (img_frag_muc in image_fragment_mucosa_names){
+  
+  mucosa_name <- str_extract(img_frag_muc, "\\d+$")
+  
+  meta <- merged_df %>% filter(image_fragment_mucosa_name == img_frag_muc)
+  
+  image_fragment_name <- paste(meta$image_name, meta$fragment_name, sep = "_")
+  
+  mucosa_path <- paste0(mucosa_dir, image_fragment_name, "_si_mucosa.geojson")
+  layers_path <- paste0(layers_dir, image_fragment_name, "_layers.geojson")
+  
+  mucosa_frag <- st_read(mucosa_path) %>%
+    st_set_crs(0)
+  
+  layers_frag <- st_read(layers_path) %>%
+    st_set_crs(0)
+  
+  layers_united<- layers_frag %>%
+    group_by(image_name, fragment_name, objectType, isLocked, classification) %>%
+    summarize(geometry = st_union(geometry, .groups = "drop"))
+  
+  villi <- layers_united  %>%
+      filter(classification == "villi") 
+  
+  crypts <- layers_united  %>%
+      filter(classification == "crypts") 
+  
+  mucosa_part <- mucosa_frag %>% filter(name == meta$name)
+  
+  mucosa_geom <- mucosa_part %>% select(name, geometry)
+  
+  villi_intersection <- st_intersection(villi, mucosa_geom) %>%
+    mutate(area_px2 = st_area(geometry),
+           area_um2 = area_px2 * meta$pixel_area_um2,
+           area_1000_um2 = area_um2 / 1000,
+           circumference_px = st_length(st_boundary(geometry)))
+  
+  crypts_intersection <- st_intersection(crypts, mucosa_geom) %>%
+    mutate(area_px2 = st_area(geometry),
+           area_um2 = area_px2 * meta$pixel_area_um2,
+           area_1000_um2 = area_um2 / 1000,
+           circumference_px = st_length(st_boundary(geometry)))
+  
+  shared_border <- st_intersection(st_boundary(villi_intersection), st_boundary(crypts_intersection))
+  
+  length_shared_border_px <- st_length(shared_border)
+  
+  villi_part <- villi_intersection %>%
+    mutate(pct_shared_border = (length_shared_border_px / circumference_px) * 100)
+  
+  crypts_part <- crypts_intersection %>%
+    mutate(pct_shared_border = (length_shared_border_px / circumference_px) * 100)
+  
+  layers_mucosa_part <- bind_rows(villi_part, crypts_part)
+  
+  mucosa_partial <- mucosa_part %>%
+    mutate(pct_villi =  (villi_part$area_1000_um2 / area_1000_um2) * 100,
+           pct_crypts =  (crypts_part$area_1000_um2 / area_1000_um2) * 100,
+           pct_shared_border_villi = villi_part$pct_shared_border,
+           pct_shared_border_crypts = crypts_part$pct_shared_border,
+           mucosa_name = mucosa_name, 
+           classification = case_when(
+             pct_villi > 40 & pct_crypts > 40 & pct_shared_border_villi > 40 & 
+               pct_shared_border_crypts > 40 ~ "excellent_orientation",
+             pct_villi > 30 & pct_crypts > 30 & pct_shared_border_villi > 30 & pct_shared_border_crypts > 30 &
+        !(pct_villi > 40 & pct_crypts > 40 & pct_shared_border_villi > 40 & pct_shared_border_crypts > 40) ~ "adequate_orientation",
+        pct_villi > 10 & pct_crypts > 10 & pct_shared_border_villi > 10 & pct_shared_border_crypts > 10 &
+        !(pct_villi > 30 & pct_crypts > 30 & pct_shared_border_villi > 30 & pct_shared_border_crypts > 30) ~
+          "marginal_orientation",
+        pct_villi <= 10 | pct_crypts <= 10 | pct_shared_border_villi <= 10 | pct_shared_border_crypts <= 10 ~ "inadequate_orientation",
+      TRUE ~ NA_character_
+    ))
+  
+  
+  st_write(mucosa_partial, paste0(output_dir, img_frag_muc, "_orientation.geojson"),
+           quiet = TRUE, delete_dsn = TRUE)
+  
+  template <- mucosa_partial%>% st_drop_geometry() %>%
+    select(image_name, 
+           fragment_name, 
+           mucosa_name,
+           area_1000_um2, 
+           pct_villi, 
+           pct_crypts, 
+           pct_shared_border_villi, 
+           pct_shared_border_crypts,
+           classification)
+  
+  templates_all <- bind_rows(templates_all, template)
+}
+
+  
+  
+  
+  
+
+write_xlsx(templates_all, paste0(output_dir, "_orientation_template.xlsx"))
+```
+
+
+
+
+```{r}
+included <- reviewed %>% filter(classification == "included_si_mucosa") %>%
+  mutate(image_fragment_name = paste(image_name, fragment_name, sep = "_"))
+
+included_image_fragment_names <- unique(included$image_fragment_name)
+
+for (frag in included_image_fragment_names[11]){
+ 
+  layers_path <- paste0(layers_dir, frag, "_layers.geojson")
+  
+  layers <- st_read(layers_path) %>%
+    st_set_crs(0)
+  
+  layers_united <- layers %>%
+    group_by(classification) %>%
+    summarize(geometry = st_union(geometry, .groups = "drop"))
+  
+  villi_geom <- layers_united  %>%
+      filter(classification == "villi") %>%
+      pull(geometry)
+  
+  crypts_geom <- layers_united  %>%
+      filter(classification == "crypts") %>%
+      pull(geometry)
+  
+  image_name <- layers$image_name
+  fragment_name <- layers$fragment_name
+  
+  
+  mucosa_path <- paste0(mucosa_dir, frag, "_si_mucosa.geojson")
+  
+  mucosa <- st_read(mucosa_path) %>%
+    st_set_crs(0)
+  
+  mucosa_names <- mucosa$name
+  
+  for (mucosa_name in mucosa_names){
+    
+    mucosa_part <- mucosa %>% filter(name == mucosa_name)
+    
+    villi_intersection <- st_intersection(villi_geom, mucosa_part) %>%
+      st_union()
+    
+  
+    
+    villi_mucosa_part <- st_sf(
+      image_name = image_name, 
+      fragment_name = fragment_name,
+      mucosa_name = mucosa_name,
+      classification = "villi",
+      geometry = villi_intersection
+    )
+    crypts_intersection <- st_intersection(crypts_geom, mucosa_part) 
+    
+    crypts_intersect_geom <- st_union(crypts_intersection)
+    
+    crypts_mucosa_part <- st_sf(
+      image_name = image_name, 
+      fragment_name = fragment_name,
+      mucosa_name = mucosa_name,
+      classification = "crypts",
+      geometry = crypts_intersection
+    )
+    
+    layers_mucosa_part <- bind_rows(villi_mucosa_part, crypts_mucosa_part)
+  
+    
+    
+    
+  }
+  
+  intersect_list <- list()
+  
+  for (layer_class in unique(layers$classification)) {
+    layer_geom <- layers  %>%
+      filter(classification == layer_class) %>%
+      pull(geometry)
+    
+    intersect_geom <- st_sfc(crs = st_crs(mucosa))
+    
+    for (i in seq_len(nrow(mucosa))) {
+      mucosa_part <- mucosa[i]
+      
+      current_mucosa_geom <- mucosa$geometry[i]
+      intersection <- st_intersection(layer_geom, current_mucosa_geom)
+      
+      if (length(intersection) > 0) {
+        
+        intersect_geom <- c(intersect_geom, intersection)
+      }
+    }
+    
+    intersect_geom <- st_union(intersect_geom)
+    
+    intersect_list[[layer_class]] <- st_sf(
+      classification = layer_class,
+      geometry = intersect_geom
+    )
+  }
+  
+  layers_mucosa <- bind_rows(intersect_list)
+  
+  geom_villi <- layers_mucosa %>% filter(classification == "villi") %>% pull(geometry)
+  
+  geom_crypts <- layers_mucosa %>% filter(classification == "crypts") %>% pull(geometry)
+  
+  shared_border <- st_intersection(st_boundary(geom_villi), st_boundary(geom_crypts))
+  
+  length_shared_border <- st_length(shared_border) %>% sum()
+  circumference_villi <- st_length(st_boundary(geom_villi)) %>% sum()
+  
+  circumference_crypts <- st_length(st_boundary(geom_crypts)) %>% sum()
+  
+  pct_shared_border_of_villi_circ <- as.numeric(length_shared_border / circumference_villi) * 100
+  
+  pct_shared_border_of_crypts_circ <- as.numeric(length_shared_border / circumference_crypts) * 100
+  
+  
+  
+
+  
+  
+  
+  
+}
+
+```
