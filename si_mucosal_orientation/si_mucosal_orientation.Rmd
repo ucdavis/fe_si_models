@@ -1,0 +1,72 @@
+---
+title: "si_mucosal_orentation"
+author: "Wulcan"
+date: "2025-06-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Objective
+The objective of this model is to identify regions of small intestinal mucosa 
+in tissue fragments and classify them based on orientation (adequate, marginal, inadequate)
+
+## Input
+- *corrected_fragments_labl_2020_tuning.json* (fe_si_models/fragments/output/validate/fragments/)
+List of fragments where classification has been corrected for duplicates
+
+-*<image_name>_fragments.geojson*
+-*image_name>_<fragment_name>_layers.geojson*
+
+## Output
+- *<image_name>_<fragment_name>_<mucosa_name>_si_mucosa_orientation.geojson*
+
+## Parameters
+The thresholds were set by examining proportions in fragments in the tuning set. 
+
+## Issues /Comments / Deviations
+- This leverages the layers model (crypts vs villi) and is not designed to differentiate small intestine from other tissues. The hope is however that other tissues would generally fall in the "inadequate" category and be able to be filtered out with that prior to further processing.
+- 
+
+
+
+
+```{r}
+      
+      intersection_df <- layers %>%
+        mutate(confidence_percentage = round(confidence_percentage)) %>%
+        select(classification, confidence_percentage, geometry) %>%
+        st_intersection(si_mucosa_orientation %>% select(name, geometry)) %>%
+        mutate(area_intersect_px2 = st_area(geometry),
+               area_intersect_um2 = area_intersect_px2 * pixel_area_um2)
+      
+      summary_stats <- intersection_df %>%
+        st_drop_geometry() %>%
+        group_by(name) %>%
+        summarise(
+          total_area = sum(area_intersect_um2),
+          villi_area = sum(area_intersect_um2[classification == "villi"], na.rm = TRUE),
+          crypt_area = sum(area_intersect_um2[classification == "crypts"], na.rm = TRUE),
+          villi_area_high_confidence = sum(area_intersect_um2[classification == "villi" & confidence_percentage == 100], na.rm = TRUE),
+          crypt_area_high_confidence = sum(area_intersect_um2[classification == "crypts" & confidence_percentage == 100], na.rm = TRUE)) %>%
+        mutate(
+          pct_high_confidence_villi = ifelse(villi_area > 0, (villi_area_high_confidence /total_area) * 100, 0),
+          pct_high_confidence_crypts = ifelse(crypt_area > 0, (crypt_area_high_confidence / total_area) * 100, 0)) %>%
+        select(name, pct_high_confidence_villi, pct_high_confidence_crypts)
+    }
+}
+  
+  
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
