@@ -1,0 +1,113 @@
+---
+title: "validate_si_mucosa"
+author: "Wulcan"
+date: "2025-06-09"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Issues/Devitaions/Comments
+This assumes lazy labelling of the si_mucosa where "marginal" etc is used instead of "marginal_orientation".
+```{r}
+library(readxl)
+library(jsonlite)
+library(tidyverse)
+library(caret)
+
+
+validate_si_mucosa <- function(reviewed) {
+ reviewed <- reviewed %>%
+   mutate(target = case_when(
+     ((classification == "marginal_orientation" & is.na(correction)) | correction == "marginal") ~ "marginal_orientation",
+     ((classification == "inadequate_orientation" & is.na(correction)) | correction == "inadequate") ~ "inadequate_orientation",
+     ((classification == "adequate_orientation" & is.na(correction)) | correction == "adequate") ~ "adequate_orientation",
+     ((classification == "no_si_mucosa" & is.na(correction)) | correction == "no_si") ~ "no_si_mucosa",
+      TRUE ~ NA_character_
+    ))
+ 
+ # Factor levels (ensure consistent order)
+  orientation_levels <- c("adequate_orientation", "marginal_orientation", 
+                          "inadequate_orientation", "no_si_mucosa")
+  
+  # Confusion matrix
+  conf_matrix <- confusionMatrix(
+    factor(reviewed$classification, levels = orientation_levels),
+    factor(reviewed$target, levels = orientation_levels)
+  )
+  
+  # Prepare data for plot
+  cm_df <- as.data.frame(conf_matrix$table)
+  colnames(cm_df) <- c("Predicted", "Actual", "Freq")
+  
+  # Confusion matrix heatmap
+  confusion_matrix <- ggplot(cm_df, aes(x = Actual, y = Predicted, fill = Freq)) +
+    geom_tile(color = "black") +
+    geom_text(aes(label = Freq), size = 4, family = "Arial") +
+    scale_fill_gradient(low = "white", high = "orange") +
+    scale_x_discrete(position = "top") +
+    scale_y_discrete(limits = rev(orientation_levels)) +
+    theme_minimal() +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 0),
+      axis.text = element_text(size = 9, family = "Arial"),
+      legend.title = element_text(size = 9, family = "Arial"),
+      axis.title = element_text(face = "bold"),
+      legend.position = "right"
+    ) +
+    labs(x = "Actual Class", y = "Predicted Class",
+         fill = "Count")
+
+  # Performance metrics table
+  by_class <- as.data.frame(conf_matrix$byClass)
+
+  if (is.null(rownames(by_class))) {
+    rownames(by_class) <- orientation_levels[1]  # binary case
+  } else {
+    rownames(by_class) <- orientation_levels
+  }
+
+  performance_metrics <- by_class %>%
+    rename(prevalence = Prevalence,
+           se = Sensitivity,
+           sp = Specificity,
+           ppv = `Pos Pred Value`,
+           npv = `Neg Pred Value`,
+           f1 = F1,
+           balanced_accuracy = `Balanced Accuracy`) %>%
+    select(prevalence, se, sp, ppv, npv, f1, balanced_accuracy)
+
+  return(list(confusion_matrix = confusion_matrix,
+              performance_metrics = performance_metrics))
+}
+```
+
+### Validate si_mucosa on labl_2020_tuning
+#### Issues/Deviations/Comments
+This set was used for setting parameters - basically training performance (although not as big risk of
+overfitting as an ML model)
+```{r}
+reviewed <- read_xlsx("~/Library/CloudStorage/Box-Box/Projects/fe_si_models/si_mucosa/input/reviewed_si_mucosa_labl_2020_tuning.xlsx")
+
+output_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/si_mucosa/output/validate_si_mucosa/"
+validated <- validate_si_mucosa(reviewed)
+
+print(validated$confusion_matrix)
+print(validated$performance_metrics)
+
+png(paste0(output_dir, "confusion_matrix_si_mucosa_labl_2020_tuning.png"), width = 7, height = 3, units = "in", res = 300)
+plot(validated$confusion_matrix)  # Replace with your actual plotting function if needed
+dev.off()
+
+write_json(validated$performance_metrics, paste0(output_dir, "performance_si_mucosa_labl_2020_tuning.json"), pretty = TRUE)
+```
+  
+  
+  
+
+ 
+
+
+        

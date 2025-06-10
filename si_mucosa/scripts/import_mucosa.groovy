@@ -13,7 +13,7 @@ def shortName = imageName.contains('.vsi')
     : imageName
 
 // Glob pattern to match all files with fragment numbers
-new File(inputDir).eachFileMatch(~/${shortName}_\d{2}_${className}\.geojson/) { file ->
+new File(inputDir).eachFileMatch(~/${shortName}_\d{2}_\d{2}_${className}\.geojson/) { file ->
     println("Importing annotations from: ${file.absolutePath}")
     importObjectsFromFile(file.absolutePath)
 }
