@@ -5,9 +5,9 @@ Identify different tissue fragments on a wsi and label them for inclusion or exc
 This is not a ML-model but a rule-based model taking tissue polygons generated 
 by "tissue_vs_glass" as input and outputting fragment polygons. 
 
-![Schematic](assets/overview_si_mucosa_.png)
+![Schematic](assets/overview_si_mucosa.png)
 
-![Schematic](assets/legend_.png)
+![Schematic](assets/legend.png)
 
 ## Scripts
 - **si_mucosa_.Rmd**
