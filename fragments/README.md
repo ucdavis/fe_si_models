@@ -22,5 +22,8 @@ from labl_2020 (https://github.com/ucdavis/fe_si_samples/tree/main/labl_2020)
 Training sets batch 1-3 were used for initial parameter setting and the tuning set
 for visual assessment.
 
+Validation outline is here:
+![Schematic](assets/overview_fragments_validation_.png)
+
 ## 2DO
 - testing
