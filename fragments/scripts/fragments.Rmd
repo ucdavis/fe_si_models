@@ -339,8 +339,7 @@ write_xlsx(template, paste0(output_dir, "template_fragments_labl_2025_clonality.
 
 #### Input
 - subset_labl_2020_test.json (fe_si_images/output/process_subset/)
-#### Output
-- 
+
 ```{r, message=FALSE, warning=FALSE}
 subset_labl_2020_test<- fromJSON("~/Library/CloudStorage/Box-Box/Projects/fe_si_images/output/process_subset/subset_labl_2020_test.json")
 
