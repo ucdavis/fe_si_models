@@ -51,6 +51,8 @@ Geojson with polygons for all tissue fragments
 - *fragment_metadata_<image_subset>.json* (output/fragments/)
 df with metadata for all fragments in set
 - *template_fragments_<image_subset>.xlsx* (output/fragments)
+- *fragments_metadata.json* (output/fragments/)
+df with metadata for all processed fragments (update with each new chunk to avoid double analysis)
   
 ## Issues / Deviations
 - fragments with a large area touching the neighboring fragments are merged to one
@@ -74,7 +76,7 @@ options(scipen = 999) #turn of scientific notation
 
 to_box <- "~/Library/CloudStorage/Box-Box/"
 
-generate_fragments <- function(image_metadata,
+generate_fragments <- function(subset,
                                tissue_dir,
                                output_dir,
                                tolerance_value = 150,
@@ -86,6 +88,9 @@ generate_fragments <- function(image_metadata,
                                similarity_threshold = 0.70
                                ) {
   
+  
+  
+  
   fragments_metadata_set <- data.frame(
     image_name = character(),
     fragment_name = character(),
@@ -93,14 +98,16 @@ generate_fragments <- function(image_metadata,
     fragment_area_um2 = character()
     )
   
-  for (row in 1:nrow(image_metadata)) {
+  
+  
+  for (row in 1:nrow(subset)) {
     
-    image_name <- image_metadata$image_name[row]
+    image_name <- subset$image_name[row]
     
     print(paste0("Processing image ", image_name))
     
-    pixel_length_um <- image_metadata$pixel_length_um[row]
-    pixel_area_um2 <- image_metadata$pixel_area_um2[row]
+    pixel_length_um <- subset$pixel_length_um[row]
+    pixel_area_um2 <- subset$pixel_area_um2[row]
     
     #transform parameters from um to px
     merge_buffer_px <- merge_buffer_um / pixel_length_um
@@ -241,7 +248,7 @@ generate_fragments <- function(image_metadata,
         overlaps_include = lengths(st_intersects(geometry, include_sets)) > 0,
         included = overlaps_include,
         exclusion_reason = ifelse(!included, "duplicate", NA_character_),
-        classification = ifelse(included, "included_fragment", "duplicate_fragment")) %>%
+        classification = ifelse(included, "original_fragment", "duplicate_fragment")) %>%
       select(-overlaps_include)
     
     file_name_fragments <- paste0(output_dir, image_name, "_fragments.geojson")
@@ -261,8 +268,9 @@ generate_fragments <- function(image_metadata,
 
 
 
-
-
+#Create a json to keep track of all fragments processed ever
+#all_fragment_metadata <- NULL
+#write_json(all_fragment_metadata, "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/fragments/output/fragments/fragments_metadata.json", pretty =TRUE)
 
 ```
 
@@ -270,6 +278,7 @@ generate_fragments <- function(image_metadata,
 
 #### Input
 - subset_labl_2020_training.json (fe_si_images/output/process_subset/)
+
 ```{r, message=FALSE, warning=FALSE}
 subset_labl_2020_training <- fromJSON("~/Library/CloudStorage/Box-Box/Projects/fe_si_images/output/process_subset/subset_labl_2020_training.json")
 
@@ -283,7 +292,11 @@ template <- generate_fragments(subset_labl_2020_training, tissue_dir, output_dir
 
 write_json(template, paste0(output_dir, "fragment_metadata_labl_2020_training.json"))
 
+all_fragment_metadata <- fromJSON("~/Library/CloudStorage/Box-Box/Projects/fe_si_models/fragments/output/fragments/fragments_metadata.json")
 
+all_fragment_metadata <- bind_rows(all_fragment_metadata, template)
+
+write_json(all_fragment_metadata, paste0(output_dir, "fragments_metadata.json"))
 ```
 
 
@@ -310,6 +323,12 @@ write_xlsx(template_tuning, paste0(output_dir, "template_fragments_labl_2020_tun
 
 template_tuning <- fromJSON(paste0(output_dir, "fragment_metadata_labl_2020_tuning.json"))
 write_xlsx(template_tuning, paste0(output_dir, "template_fragments_labl_2020_tuning.xlsx"))
+
+all_fragment_metadata <- fromJSON("~/Library/CloudStorage/Box-Box/Projects/fe_si_models/fragments/output/fragments/fragments_metadata.json")
+
+all_fragment_metadata <- bind_rows(all_fragment_metadata, template_tuning)
+
+write_json(all_fragment_metadata, paste0(output_dir, "fragments_metadata.json"))
 ```
 
 
@@ -320,20 +339,33 @@ write_xlsx(template_tuning, paste0(output_dir, "template_fragments_labl_2020_tun
 #### Output
 - 
 ```{r, message=FALSE, warning=FALSE}
-subset_labl_2025_clonality<- fromJSON("~/Library/CloudStorage/Box-Box/Projects/fe_si_images/output/process_subset/subset_labl_2025_clonality.json")
+all_fragment_metadata <- fromJSON("~/Library/CloudStorage/Box-Box/Projects/fe_si_models/fragments/output/fragments/fragments_metadata.json")
+
+subset_labl_2025_clonality<- fromJSON("~/Library/CloudStorage/Box-Box/Projects/fe_si_images/output/process_subset/subset_labl_2025_clonality.json") 
+
+unprocessed <- subset_labl_2025_clonality %>%
+  filter(!(image_name %in% all_fragment_metadata$image_name))
+
 
 tissue_dir <- paste0(to_box, "Projects/fe_si_models/tissue_vs_glass/output/export_tissue/")
 
 output_dir <- paste0(to_box, "Projects/fe_si_models/fragments/output/fragments/")
 
 
-template <- generate_fragments(subset_labl_2025_clonality, tissue_dir, output_dir)
+template <- generate_fragments(unprocessed, tissue_dir, output_dir)
 
-write_json(template, paste0(output_dir, "fragment_metadata_labl_2025_clonality.json"), pretty = TRUE)
+all_fragment_metadata <- bind_rows(all_fragment_metadata, template)
 
-write_xlsx(template, paste0(output_dir, "template_fragments_labl_2025_clonality.xlsx"))
+write_json(all_fragment_metadata, paste0(output_dir, "fragments_metadata.json"))
+
+fragment_metadata_labl_2025_clonality <- all_fragment_metadata %>% filter(image_name %in% subset_labl_2025_clonality$image_name)
+
+write_json(fragment_metadata_labl_2025_clonality, paste0(output_dir, "fragment_metadata_labl_2025_clonality.json"), pretty = TRUE)
+
+write_xlsx(fragment_metadata_labl_2025_clonality, paste0(output_dir, "template_fragments_labl_2025_clonality.xlsx"))
 
 ```
+
 
 ### Run labl_2020_test
 
@@ -341,17 +373,30 @@ write_xlsx(template, paste0(output_dir, "template_fragments_labl_2025_clonality.
 - subset_labl_2020_test.json (fe_si_images/output/process_subset/)
 
 ```{r, message=FALSE, warning=FALSE}
+
+all_fragment_metadata <- fromJSON("~/Library/CloudStorage/Box-Box/Projects/fe_si_models/fragments/output/fragments/fragments_metadata.json")
+
 subset_labl_2020_test<- fromJSON("~/Library/CloudStorage/Box-Box/Projects/fe_si_images/output/process_subset/subset_labl_2020_test.json")
+
+unprocessed <- subset_labl_2020_test %>%
+  filter(!(image_name %in% all_fragment_metadata$image_name))
 
 tissue_dir <- paste0(to_box, "Projects/fe_si_models/tissue_vs_glass/output/export_tissue/")
 
 output_dir <- paste0(to_box, "Projects/fe_si_models/fragments/output/fragments/")
 
+template <- generate_fragments(unprocessed, tissue_dir, output_dir)
 
-template <- generate_fragments(subset_labl_2020_test, tissue_dir, output_dir)
+all_fragment_metadata <- bind_rows(all_fragment_metadata, template)
 
-write_json(template, paste0(output_dir, "fragment_metadata_labl_2020_test.json"), pretty = TRUE)
+write_json(all_fragment_metadata, paste0(output_dir, "fragments_metadata.json"))
 
-write_xlsx(template, paste0(output_dir, "template_fragments_labl_2025_test.xlsx"))
+fragment_metadata_labl_2020_test <- all_fragment_metadata %>% filter(image_name %in% subset_labl_2020_test$image_name)
+
+write_json(fragment_metadata_labl_2020_test, paste0(output_dir, "fragment_metadata_labl_2020_test.json"), pretty = TRUE)
+
+write_xlsx(fragment_metadata_labl_2020_test, paste0(output_dir, "template_fragments_labl_2025_test.xlsx"))
 
 ```
+
+
