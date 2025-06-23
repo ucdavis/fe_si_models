@@ -10,6 +10,11 @@ empty glass, pen markings, stain droplets etc)
 A SOP for how to run the classifier is here:
 https://docs.google.com/presentation/d/1g6dqdjK_-pD9KiYy0RF5K494eTH6i4Gg0Zym6BH708c/edit?slide=id.p#slide=id.p
 
+The folder **qupath** contains a qupath project with the model loaded
+The script **filepaths_for_qupath** allows checking if output is already running 
+for an image, and generating a list of file_paths for automated loading of unprocessed 
+images to qupath.
+
 
 ## Model architecture
 - Multi-layer perceptron (MLP) (a shallow artificial neural network ANN) 
