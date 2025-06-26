@@ -1,0 +1,38 @@
+---
+title: "unprocessed"
+author: "Wulcan"
+date: "2025-06-26"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Objective
+This is just to filter a subset on images that are not already processed with tissue_vs_glass 
+and generate a file_path file for it to read it in to QuPath
+
+## Input
+- subset_<subset>.json (fe_si_images/output/process_subset)
+
+## Output
+- <subset>_unprocessed.txt
+```{r}
+subset <- fromJSON("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_images/output/process_subset/subset_grading_sample.json")
+subset_image_names <- subset$image_name
+tissue_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/tissue_vs_glass/output/export_tissue/"
+
+processed_files <- list.files(path = tissue_dir, full.names = FALSE)
+
+unprocessed_images <- subset_image_names[
+  !vapply(subset_image_names, function(x) any(startsWith(processed_files, x)), logical(1))
+]
+
+subset_unprocessed <- subset %>% filter(image_name %in% unprocessed_images)
+
+subset_unprocessed_file_paths <- subset_unprocessed$file_path
+
+writeLines(subset_unprocessed_file_paths, "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/tissue_vs_glass/output/unprocessed/subset_grading_sample_unprocessed.txt")
+
+```

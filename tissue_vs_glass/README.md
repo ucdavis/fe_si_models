@@ -11,7 +11,7 @@ A SOP for how to run the classifier is here:
 https://docs.google.com/presentation/d/1g6dqdjK_-pD9KiYy0RF5K494eTH6i4Gg0Zym6BH708c/edit?slide=id.p#slide=id.p
 
 The folder **qupath** contains a qupath project with the model loaded
-The script **filepaths_for_qupath** allows checking if output is already running 
+The script **unprocessed** allows checking if output is already running 
 for an image, and generating a list of file_paths for automated loading of unprocessed 
 images to qupath.
 
@@ -79,3 +79,5 @@ https://docs.google.com/document/d/1Lni-o9eW2jZ4UXC-QhvEW9tEqqR1mb3KGefZJwLDfKw/
 Not a problem for small intestinal mucosa but should be updated if analyzing deeper 
 intestinal layers or other tissue.
 - Not quantitatively assessed, not validated on test set
+- Sometimes the analysis fails - suspected corrupt image files. Failed analyses 
+are tracked (manually) here https://docs.google.com/spreadsheets/d/1oU9rc0JaMXNEJQ6CvPHMHYumQAyUP3x8ylf22a84s9Q/edit?usp=sharing
