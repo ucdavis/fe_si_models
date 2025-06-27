@@ -18,6 +18,9 @@ and generate a file_path file for it to read it in to QuPath
 
 ## Output
 - <subset>_unprocessed.txt
+
+
+### Process grading_sample (for fe_si_papers/lymphocyte_distribution_patterns...)
 ```{r}
 subset <- fromJSON("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_images/output/process_subset/subset_grading_sample.json")
 subset_image_names <- subset$image_name

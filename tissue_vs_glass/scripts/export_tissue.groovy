@@ -8,7 +8,7 @@ import java.nio.file.Files
 import java.nio.file.Paths
 
 // Define the output directory (change this to your desired location)
-def outputDir = Paths.get("/Users/jmwulcan/Library/CloudStorage/Box-Box/Projects/fe_si_models/tissue_vs_glass/output/export_tissue/") // 
+def outputDir = Paths.get("/Users/jmwulcan/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/tissue_vs_glass/output/export_tissue/") // 
 if (!Files.exists(outputDir)) {
     Files.createDirectories(outputDir)
 }
