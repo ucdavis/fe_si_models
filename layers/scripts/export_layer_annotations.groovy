@@ -8,7 +8,7 @@ import java.nio.file.Files
 import java.nio.file.Paths
 
 // Define the output directory (change this to your desired location)
-def outputDir = Paths.get("/Users/jmwulcan/Library/CloudStorage/Box-Box/Projects/fe_si_models/layers/output/qupath_export_layer_annotations/") // Update this path
+def outputDir = Paths.get("/Users/jmwulcan/Library/CloudStorage/Box-Box/Projects/fe_si_models/layers/output/export_layer_annotations/") // Update this path
 if (!Files.exists(outputDir)) {
     Files.createDirectories(outputDir)
 }

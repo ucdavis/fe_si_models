@@ -58,7 +58,7 @@ convert_linestrings_to_polygons <- function(sf_df) {
   st_set_geometry(sf_df, st_sfc(new_geoms, crs = st_crs(sf_df)))
 }
 
-# Read annotation geojsons 
+# Read qupath generated annotation geojsons 
 read_annotations_raw <- function(annotation_dir, image_names) {
   annotations <- image_names %>% 
     map_dfr(function(img) {
@@ -255,7 +255,8 @@ explore_composition<- function(val_sf, class_palette) {
     scale_fill_manual(values = class_palette) +  # Custom color palette
     labs(x = "", y = "", fill = "Classification") +
     theme_bw(base_family = "Arial") +  # Set base font to Arial
-    theme(text = element_text(size = 9, family = "Arial"))  # Set font size 9
+    theme(text = element_text(size = 9, family = "Arial")) +
+    theme(legend.position = "bottom")
 
   return(list(summary = val_sf_summary, plot = p))  # Return the plot
 }
@@ -279,16 +280,19 @@ explore_ai_confidence <- function(sf_val, confidence_palette) {
   # Summarize total area per classification and confidence_bin
   df_plot <- data %>%
     st_drop_geometry() %>%
+    filter(classification != "empty") %>%
     group_by(classification, confidence_bin) %>%
     summarise(total_area = sum(normalized_area, na.rm = TRUE), .groups = "drop") %>%
     group_by(classification) %>%
     mutate(percent_area = total_area / sum(total_area) * 100) %>%
-    ungroup()
-  
-  # Reorder confidence_bin within each classification so the largest is at the bottom
-  df_plot <- df_plot %>%
+    ungroup() %>%
     arrange(classification, desc(percent_area)) %>%
-    mutate(confidence_bin = factor(confidence_bin, levels = paste(seq(0, 99, by = 1), seq(1, 100, by = 1), sep = "-"))) 
+    mutate(confidence_bin = factor(confidence_bin, levels = paste(seq(0, 99, by = 1), seq(1, 100, by = 1), sep = "-"))) %>%
+    mutate(classification = case_when(
+      classification == "crypts" ~ "Crypts",
+      classification == "villi" ~ "Villi",
+      TRUE ~ classification))
+
 
   # Generate the stacked bar plot
   p <- ggplot(df_plot, aes(x = classification, y = percent_area, fill = confidence_bin)) +
@@ -303,89 +307,6 @@ explore_ai_confidence <- function(sf_val, confidence_palette) {
     )  # Combined into a single theme() call
   
   return(list(summary = df_plot, plot = p))  # Properly return the plot object
-}
-
-
-#Explore calibration by class
-explore_calibration <- function(input_sf, target_class, bin_breaks, bin_labels) {
-  # Load required libraries (if not already loaded)
-  library(dplyr)
-  library(sf)
-  library(ggplot2)
-  
-  # Define a safe_area function to compute geometry area (or 0 if empty)
-  safe_area <- function(geom) {
-    if (length(geom) == 0 || all(st_is_empty(geom))) {
-      return(0)
-    } else {
-      return(as.numeric(st_area(geom)))
-    }
-  }
-  
-  # Filter to the target class (e.g. "villi" or "crypts")
-  target_df <- input_sf %>% filter(classification == target_class)
-  
-  # Create confidence bins.
-  
-  pred <- target_df %>%
-    mutate(confidence_bin = cut(confidence_percentage,
-                                breaks = bin_breaks,
-                                include.lowest = TRUE,
-                                right = FALSE,
-                                labels = bin_labels))
-  
-  # Separate ground truth and predictions.
-  gt_sf <- pred %>% filter(source == "annotation")
-  pred_sf <- pred %>% filter(source == "ai")
-  
-  # Union all ground truth geometries into one
-  gt_union <- st_union(gt_sf)
-  
-  # Group the prediction geometries by confidence bin and union them.
-  pred_bins <- pred_sf %>%
-    group_by(confidence_bin) %>%
-    summarise(geometry = st_union(geometry)) %>%  # one geometry per bin
-    ungroup()
-
-  # Compute the True Positive (TP) and False Positive (FP) geometries.
-  # TP: Intersection of the bin geometry with the ground truth.
-  # FP: Difference between the bin geometry and the ground truth.
-  pred_bins <- pred_bins %>%
-    rowwise() %>%
-    mutate(
-      TP_geom = list(st_union(st_intersection(geometry, gt_union))),
-      FP_geom = list(st_union(st_difference(geometry, gt_union)))
-    ) %>%
-    ungroup()
-
-  # Calculate the area for TP and FP, and compute PPV.
-  # Use a conditional check to avoid subscript out of bounds if the list element is empty.
-  pred_bins <- pred_bins %>%
-    st_drop_geometry() %>%
-  rowwise() %>%
-  mutate(
-    TP_area = safe_area(TP_geom),
-    FP_area = safe_area(FP_geom),
-    PPV = ifelse((TP_area + FP_area) == 0, NA, TP_area / (TP_area + FP_area))
-  ) 
-  
-  pred_bins <- pred_bins %>% 
-    select(confidence_bin, TP_area, FP_area, PPV)
-
-  # Create and return the calibration plot.
-  p <- ggplot(pred_bins, aes(x = confidence_bin, y = PPV)) +
-    geom_point(size = 3) +
-    geom_line(aes(group = 1), linetype = "dashed") +
-    labs(x = "Confidence Bin", 
-         y = "Positive Predictive Value (PPV)",
-         title = paste("PPV by Confidence Bin for", target_class)) +
-    theme_bw(base_family = "Arial") +  # Set base font to Arial
-    theme(
-      text = element_text(size = 9, family = "Arial"),  # Set font size 9
-      legend.position = "right"
-    )
-  
-  return(list(summary = pred_bins, plot = p))
 }
 
 #Function to compute performance across different confidence thresholds
@@ -474,7 +395,7 @@ compute_class_metrics_thresholds <- function(sf, cls, thresholds, palette) {
   results_df <- results_df %>% mutate(fpr = 100 - specificity)
   
   # For plotting, only include rows with non-missing sensitivity and specificity.
-  plot_data <- results_df %>% filter(!is.na(sensitivity) & !is.na(specificity))
+  plot_data <- results_df %>% filter(!is.na(sensitivity) & !is.na(specificity)) 
   
   # Create the plot.
   p <- ggplot(plot_data, aes(x = fpr, y = sensitivity, color = factor(threshold))) +
@@ -497,80 +418,41 @@ compute_class_metrics_thresholds <- function(sf, cls, thresholds, palette) {
 ```
 
 
-### Validate model version fe_si_layers_pv6_mv11
+### Assess layers model in tuning set (for setting hyperparameters)
+This is mainly to set thresholds for confidence. Annotations are by JMW in qupath.
 
 #### Input
-- *image_fragments_name_random_rois_subset_fe_si_layers_pv6_tuning.json* (fe_si_models/layers/output/qupath_random_roi/)
+- *roi_list_fe_si_layers_pv6_tuning.json* (fe_si_models/layers/output/qupath_random_roi/)
 List of image_fragment_names with validation rois (generated with qupath/random_rois.Rmd)
 - *<image_name>_<annotation_name>.geojson* (fe_si_models/output/qupath_export_layer_annotations/)
 Crypt /villi annotations made in qupath by JMW in random rois within included fragments
 - *<image_name>_<fragment_name>_layers.geojson* (fe_si_models/combos/output/process_combos/")
 
 #### Output
-- *fe_si_layers_pv6_tuning_annotations.geojson* (fe_si_models/output/validate_layers/)
-all annotations for tuning set
-- *fe_si_layers_pv6_tuning_annotations.geojson* (fe_si_models/output/validate_layers/)
-all annotations for tuning set
-- *fe_si_layers_pv6_mv11_ai_output.geojson* (fe_si_models/output/validate_layers/)
-AI output for fragment with annotation
-- *fe_si_layers_pv6_mv11_ai_output_and_annotations.geojson* (fe_si_models/output/validate_layers/)
-AI output for fragment with annotation combined with annotations
-- *fe_si_layers_pv6_mv11_ai_output_and_annotations_by_roi_norm.geojson*(fe_si_models/output/validate_layers/)
-ai output and annotations processed by (and normalized to) rois
-- *fe_si_layers_pv6_mv11_output_and_annotation_composition.json* (fe_si_models/output/validate_layers/)
-Percentage of different classes in output and annotations
-- *fe_si_layers_pv6_mv11_output_and_annotation_composition.png* (fe_si_models/output/validate_layers/)
-Percentage of different classes in output and annotations - plot
-- *fe_si_layers_pv6_mv11_calibration_villi.json* (fe_si_models/output/validate_layers/)
-Ppv for output in different confidence groups - OBS a bit misleading since composition vary
-- *fe_si_layers_pv6_mv11_calibration_villi.png* (fe_si_models/output/validate_layers/)
-Ppv for output in different confidence groups- plot - OBS a bit misleading since composition vary
-- *fe_si_layers_pv6_mv11_calibration_crypts.json* (fe_si_models/output/validate_layers/)
-Ppv for output in different confidence groups - OBS a bit misleading since composition vary
-- *fe_si_layers_pv6_mv11_calibration_crypts.png* (fe_si_models/output/validate_layers/)
-Ppv for output in different confidence groups- plot - OBS a bit misleading since composition vary
-- *fe_si_layers_pv6_mv11_confidence.json* (fe_si_models/output/validate_layers/)
-Composition of ai confidence
-- *fe_si_layers_pv6_mv11_condicence.png* (fe_si_models/output/validate_layers/)
-Composition of ai confidence plot
-- *fe_si_layers_pv6_mv11_villi_metrics.png* (fe_si_models/output/validate_layers/)
-Performance metrics at different confidence cut offs
-- *fe_si_layers_pv6_mv11_villi_metrics.json* (fe_si_models/output/validate_layers/)
-Performance metrics at different confidence cut offs
-- *fe_si_layers_pv6_mv11_crypts_metrics.png* (fe_si_models/output/validate_layers/)
-Performance metrics at different confidence cut offs
-- *fe_si_layers_pv6_mv11_crypts_metrics.json* (fe_si_models/output/validate_layers/)
-Performance metrics at different confidence cut offs
-#### Issues /deviation
-the calibration plot was an experiment that didn't work that well given how unqeual the number of annotations in each bin are
-I should have labelled all files as tuning.
+- *<model_version>_tuning_composition.json* & *<model_version>_tuning_composition.png*
+Pct of output and annotations for each class.
+- *<model_version>_tuning_confidence.json* & *<model_version>_tuning_confidence.png*
+Pct of output by confidence
+- *<model_version>_tuning_performance_<class>.json* & *<model_version>_tuning_performance_<class>.png*
+Performance for each class by confidence
 
+#### Issues / comments / deviations
+Performs overall well in tuning set. Most ai output are high confidence. Slight gain in sensitivity with no/marginal loss in specificity with raised confidence thresholds.
+- Some of the images from the original labl_2020_tuning set were used as training images for this. these are filtered out in this tuning subset (see fe_si_images, process_subsets)
+- JMWs qupath annotations are not super tight (may be overlap or gap between adjacent regions), should matter less for validation than training.
 ```{r}
 
-image_fragment_names <- fromJSON("~/Library/CloudStorage/Box-Box/Projects/fe_si_models/layers/output/qupath_random_roi/image_fragments_name_random_rois_subset_fe_si_layers_pv6_tuning.json")
+image_fragment_names <- fromJSON("~/Library/CloudStorage/Box-Box/Projects/fe_si_models/layers/output/qupath_random_roi/roi_list_fe_si_layers_pv6_tuning.json")
 
 image_names <- unique(image_fragment_names$image_name)
 
-annotation_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/layers/output/qupath_export_layer_annotations/"
+output_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/layers/output/validate_layers/"
+#read in annotations
+annotation_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/layers/output/export_layer_annotations/"
 annotations <- read_annotations_raw(annotation_dir, image_names) 
 
-st_write(annotations, paste0(to_box,"Projects/fe_si_models/layers/output/validate_layers/fe_si_layers_pv6_tuning_annotations.geojson"), delete_dsn = TRUE, quiet = TRUE)  
-
-total_images <- n_distinct(annotations$image_name)
-
-# Create a summary table for each classification of interest
-summary_annotations_by_image <- annotations %>%
-  filter(classification %in% c("crypts", "villi")) %>%
-  distinct(image_name, classification) %>%
-  count(classification, name = "n_images") %>%
-  mutate(
-    total_images = total_images,
-    percent = (n_images / total_images) * 100
-  )
-
-write_json(summary_annotations_by_image, "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/layers/output/validate_layers/fe_si_layers_pv6_tuning_summary_annotations_by_image.json", pretty = TRUE)
-
-ai_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/combos/output/process_combos/" 
+#read in ai output
+ai_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/combos/output/combos/" 
 ai_classes <- c("villi", "crypts")
 model_version <- "fe_si_layers_pv6_mv11"
 
@@ -601,20 +483,15 @@ for (image in image_names){
 
 ai_output <- ai_output %>% select(-fragment_name)
 
-st_write(ai_output, paste0(to_box,"Projects/fe_si_models/layers/output/validate_layers/", model_version, "_ai_output.geojson"), delete_dsn = TRUE, quiet = TRUE)  
-
+#combine annotations and ai output in one frame
 combined_sf <- bind_rows(annotations, ai_output)
 
-st_write(combined_sf, paste0(to_box,"Projects/fe_si_models/layers/output/validate_layers/", model_version, "_ai_output_and_annotations.geojson"), delete_dsn = TRUE, quiet = TRUE)  
-
+# Remove annotations and ai output that doesn't overlap with ROIs and normalize areas to ROI size
 processed_by_roi <- process_roi(combined_sf)
 
 processed_by_roi_normalized <- process_val_sf(processed_by_roi)
 
-st_write(processed_by_roi_normalized, paste0(to_box,"Projects/fe_si_models/layers/output/validate_layers/", model_version, "_ai_output_and_annotations_by_roi_norm.geojson"), delete_dsn = TRUE, quiet = TRUE)
-
-
-output_dir <- paste0(to_box, "Projects/fe_si_models/layers/output/validate_layers/")
+#Explore compositon (pct of each class)
 processed_by_roi_normalized_no_roi <- processed_by_roi_normalized %>%
   filter(classification != "roi")
 
@@ -624,58 +501,15 @@ composition <- explore_composition(processed_by_roi_normalized_no_roi, class_pal
 
 print(composition)
 
-write_json(composition$summary,  paste0(to_box,"Projects/fe_si_models/layers/output/validate_layers/", model_version, "_output_and_annotation_composition.json"), pretty = TRUE)
+write_json(composition$summary,  paste0(to_box,"Projects/fe_si_models/layers/output/validate_layers/", model_version, "tuning_composition.json"), pretty = TRUE)
 
-png_file_path <- paste0(output_dir, model_version, "_output_and_annotation_composition.png")
-png(png_file_path, width = 3.5, height = 3.5, units = "in", res = 300) # resize to width 5 after
+png_file_path <- paste0(output_dir, model_version, "_tuning_composition.png")
+png(png_file_path, width = 3.5, height = 1.75, units = "in", res = 300) # resize to width 5 after
 print(composition$plot)
 dev.off()
 
 
-bin_breaks <- c(0, 10, 20, 30, 40, 50, 60, 70,  80,  90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101)
-bin_labels <- c("0-10", 
-                 "10-20",
-                 "20-30",
-                 "30-40",
-                 "40-50",
-                 "50-60",
-                 "60-70",
-                 "70-80",
-                 "80-90",
-                 "90-91",
-                "91-92",
-                "92-93",
-                "93-94",
-                "94-95",
-                "95-96",
-                "96-97",
-                "97-98",
-                "98-99",
-                "99-100",
-                "100")
-
-calibration_villi <- explore_calibration(processed_by_roi_normalized_no_roi, "villi", bin_breaks, bin_labels)
-
-print(calibration$plot)
-
-write_json(calibration_villi$summary,  paste0(to_box,"Projects/fe_si_models/layers/output/validate_layers/", model_version, "_calibration_villi.json"), pretty = TRUE)
-
-png_file_path <- paste0(output_dir, model_version, "_calibration_villi.png")
-png(png_file_path, width = 3.5, height = 3.5, units = "in", res = 300) # resize to width 5 after
-print(calibration_villi$plot)
-dev.off()
-
-calibration_crypts <- explore_calibration(processed_by_roi_normalized_no_roi, "crypts", bin_breaks, bin_labels)
-
-print(calibration_crypts$plot)
-
-write_json(calibration_crypts$summary,  paste0(to_box,"Projects/fe_si_models/layers/output/validate_layers/", model_version, "_calibration_crypts.json"), pretty = TRUE)
-
-png_file_path <- paste0(output_dir, model_version, "_calibration_crypts.png")
-png(png_file_path, width = 3.5, height = 3.5, units = "in", res = 300) # resize to width 5 after
-print(calibration_crypts$plot)
-dev.off()
-
+#Explore confidence composition of AI output
 
 confidence_palette <- c("89-90" = "#FDE0C2",
                         "90-91" = "#FDD6AF",
@@ -693,14 +527,15 @@ explored_confidence <- explore_ai_confidence(processed_by_roi_normalized_no_roi,
 
 print(explored_confidence)
 
-write_json(explored_confidence$summary,  paste0(to_box,"Projects/fe_si_models/layers/output/validate_layers/", model_version, "_confidence.json"), pretty = TRUE)
+write_json(explored_confidence$summary,  paste0(to_box,"Projects/fe_si_models/layers/output/validate_layers/", model_version, "_tuning_confidence.json"), pretty = TRUE)
 
-png_file_path <- paste0(output_dir, model_version, "_confidence.png")
-png(png_file_path, width = 3.5, height = 3.5, units = "in", res = 300) # resize to width 5 after
+png_file_path <- paste0(output_dir, model_version, "_tuning_confidence.png")
+png(png_file_path, width = 3.5, height = 3.5, units = "in", res = 300) 
 print(explored_confidence$plot)
 dev.off()
 
 
+#Calculate performance metrics per class by confidence threshold
 thresholds <- c(40, 50, 60, 70, 80, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100)
 threshold_palette <- c("100" = "#7F2704",
                        "99" = "#9F3303",
@@ -718,9 +553,9 @@ threshold_palette <- c("100" = "#7F2704",
 
 villi_metrics_by_threshold <- compute_class_metrics_thresholds(processed_by_roi_normalized, "villi", thresholds, threshold_palette)
 
-write_json(villi_metrics_by_threshold$metrics,  paste0(to_box,"Projects/fe_si_models/layers/output/validate_layers/", model_version, "_metrics_villi.json"), pretty = TRUE)
+write_json(villi_metrics_by_threshold$metrics,  paste0(to_box,"Projects/fe_si_models/layers/output/validate_layers/", model_version, "_tuning_metrics_villi.json"), pretty = TRUE)
 
-png_file_path <- paste0(output_dir, model_version, "_metrics_villi.png")
+png_file_path <- paste0(output_dir, model_version, "_tuning_metrics_villi.png")
 png(png_file_path, width = 3.5, height = 3.5, units = "in", res = 300) # resize to width 5 after
 print(villi_metrics_by_threshold$plot)
 dev.off()
@@ -728,15 +563,178 @@ dev.off()
 
 crypts_metrics_by_threshold <- compute_class_metrics_thresholds(processed_by_roi_normalized, "crypts", thresholds, threshold_palette)
 
-write_json(crypts_metrics_by_threshold$metrics,  paste0(to_box,"Projects/fe_si_models/layers/output/validate_layers/", model_version, "_metrics_crypts.json"), pretty = TRUE)
+write_json(crypts_metrics_by_threshold$metrics,  paste0(to_box,"Projects/fe_si_models/layers/output/validate_layers/", model_version, "_tuning_metrics_crypts.json"), pretty = TRUE)
 
-png_file_path <- paste0(output_dir, model_version, "_metrics_crypts.png")
+png_file_path <- paste0(output_dir, model_version, "_tuning_metrics_crypts.png")
 png(png_file_path, width = 3.5, height = 3.5, units = "in", res = 300) # resize to width 5 after
 print(crypts_metrics_by_threshold$plot)
 dev.off()
 
+#All empty are 100 by default
+thresholds <- 100
+empty_metrics_by_threshold <- compute_class_metrics_thresholds(processed_by_roi_normalized, "empty", thresholds, threshold_palette)
+
+write_json(empty_metrics_by_threshold$metrics,  paste0(to_box,"Projects/fe_si_models/layers/output/validate_layers/", model_version, "_tuning_metrics_empty.json"), pretty = TRUE)
+
 ```
 
 
+### Assess layers model for test set
+
+### Assess layers model in tuning set (for setting hyperparameters)
+#### Input
+- *roi_list_fe_si_layers_pv6_tuning.json* (fe_si_models/layers/output/qupath_random_roi/)
+List of image_fragment_names with validation rois (generated with qupath/random_rois.Rmd)
+- *<image_name>_<annotation_name>.geojson* (fe_si_models/output/qupath_export_layer_annotations/)
+Crypt /villi annotations made in qupath by JMW in random rois within included fragments
+- *<image_name>_<fragment_name>_layers.geojson* (fe_si_models/combos/output/process_combos/")
+
+#### Output
+- *<model_version>_test_composition.json* & *<model_version>_test_composition.png*
+Pct of output and annotations for each class.
+- *<model_version>_test_confidence.json* & *<model_version>_test_confidence.png*
+Pct of output by confidence
+- *<model_version>_test_performance_<class>.json* & *<model_version>_test_performance_<class>.png*
+Performance for each class by confidence
+
+#### Issues / comments / deviations
+Rerun this after downloading and processing ai output
+```{r}
+
+image_fragment_names <- fromJSON("~/Library/CloudStorage/Box-Box/Projects/fe_si_models/layers/output/qupath_random_roi/roi_list_labl_2020_test.json")
+
+image_names <- unique(sub("^(.*)_.*$", "\\1", image_fragment_names))
+
+output_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/layers/output/validate_layers/"
+
+#read in annotations
+annotation_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/layers/output/export_layer_annotations/"
+annotations <- read_annotations_raw(annotation_dir, image_names) %>%
+  filter(classification == "roi" | classification == "villi" | classification == "crypts")
+
+#read in ai output
+ai_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/combos/output/combos/" 
+ai_classes <- c("villi", "crypts")
+model_version <- "fe_si_layers_pv6_mv11"
+
+ai_output <- NULL
+for (image in image_names){
+  
+  fragments <- image_fragment_names[grepl(paste0("^", image, "_"), image_fragment_names)]
+  
+  fragment_names <- sub("^.*_", "", fragments)
+  
+  for (fragment_name in fragment_names){
+    ai_output_fragment_path <- paste0(ai_dir, image, "_", fragment_name, "_layers.geojson")
+    
+    if (file.exists(ai_output_fragment_path)) {
+      
+      ai_output_fragment <- st_read(ai_output_fragment_path, quiet = TRUE) %>%
+        st_set_crs(0) 
+      
+      if(nrow(ai_output_fragment) > 0){
+        ai_output_fragment <- ai_output_fragment %>%
+          mutate(source = "ai") %>%
+          select(image_name, fragment_name, classification, source, confidence_percentage, geometry)
+        
+        ai_output_fragment_converted <- convert_linestrings_to_polygons(ai_output_fragment)
+        ai_output <- bind_rows(ai_output, ai_output_fragment_converted)
+      }
+    }
+  }
+}
+
+ai_output <- ai_output %>% select(-fragment_name)
+
+#combine annotations and ai output in one frame
+combined_sf <- bind_rows(annotations, ai_output)
+
+# Remove annotations and ai output that doesn't overlap with ROIs and normalize areas to ROI size
+processed_by_roi <- process_roi(combined_sf)
+
+processed_by_roi_normalized <- process_val_sf(processed_by_roi)
+
+#Explore compositon (pct of each class)
+processed_by_roi_normalized_no_roi <- processed_by_roi_normalized %>%
+  filter(classification != "roi")
+
+
+class_palette <- c("crypts" = "#31a354", "villi" = "#a1d99b", "empty" = "grey")
+
+composition <- explore_composition(processed_by_roi_normalized_no_roi, class_palette)
+
+print(composition)
+
+write_json(composition$summary,  paste0(to_box,"Projects/fe_si_models/layers/output/validate_layers/", model_version, "test_composition.json"), pretty = TRUE)
+
+png_file_path <- paste0(output_dir, model_version, "_test_composition.png")
+png(png_file_path, width = 3.5, height = 1.75, units = "in", res = 300) # resize to width 5 after
+print(composition$plot)
+dev.off()
+
+
+#Explore confidence composition of AI output
+
+confidence_palette <- c("89-90" = "#FDE0C2",
+                        "90-91" = "#FDD6AF",
+                        "91-92" = "#FDCC9C",
+                        "92-93" = "#FDBE85",
+                        "93-94" = "#FDAF6D",
+                        "94-95" = "#FA8533",
+                        "95-96" = "#EF6712",
+                        "96-97" = "#C84201",
+                        "97-98" = "#B33A02",
+                        "98-99" = "#9F3303",
+                        "99-100" = "#7F2704"
+                        )
+explored_confidence <- explore_ai_confidence(processed_by_roi_normalized_no_roi, confidence_palette)
+
+print(explored_confidence)
+
+write_json(explored_confidence$summary,  paste0(to_box,"Projects/fe_si_models/layers/output/validate_layers/", model_version, "_test_confidence.json"), pretty = TRUE)
+
+png_file_path <- paste0(output_dir, model_version, "_test_confidence.png")
+png(png_file_path, width = 3.5, height = 3.5, units = "in", res = 300) 
+print(explored_confidence$plot)
+dev.off()
+
+
+#Calculate performance metrics per class by confidence threshold
+thresholds <- c(40, 50, 60, 70, 80, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100)
+threshold_palette <- c("100" = "#7F2704",
+                       "99" = "#9F3303",
+                       "98" = "#B33A02",
+                       "97" = "#C84201",
+                       "96" = "#EF6712",
+                       "95" = "#FA8533",
+                       "94" = "#FDAF6D",
+                       "93" = "#FDBE85",
+                       "92" = "#FDCC9C",
+                       "91" = "#FDD6AF",
+                       "90" = "#FDE0C2"
+                       
+                       )
+
+villi_metrics_by_threshold <- compute_class_metrics_thresholds(processed_by_roi_normalized, "villi", thresholds, threshold_palette)
+
+write_json(villi_metrics_by_threshold$metrics,  paste0(to_box,"Projects/fe_si_models/layers/output/validate_layers/", model_version, "_test_metrics_villi.json"), pretty = TRUE)
+
+png_file_path <- paste0(output_dir, model_version, "_test_metrics_villi.png")
+png(png_file_path, width = 3.5, height = 3.5, units = "in", res = 300) # resize to width 5 after
+print(villi_metrics_by_threshold$plot)
+dev.off()
+
+
+crypts_metrics_by_threshold <- compute_class_metrics_thresholds(processed_by_roi_normalized, "crypts", thresholds, threshold_palette)
+
+write_json(crypts_metrics_by_threshold$metrics,  paste0(to_box,"Projects/fe_si_models/layers/output/validate_layers/", model_version, "_test_metrics_crypts.json"), pretty = TRUE)
+
+png_file_path <- paste0(output_dir, model_version, "_test_metrics_crypts.png")
+png(png_file_path, width = 3.5, height = 3.5, units = "in", res = 300) # resize to width 5 after
+print(crypts_metrics_by_threshold$plot)
+dev.off()
+
+
+```
 
 

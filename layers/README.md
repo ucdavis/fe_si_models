@@ -1,4 +1,4 @@
-This folder documents development and testing of the layers model (fe_si_layers_pv6_mv11)
+This folder documents development and testing of the layers model
 
 ## Model objective
 Segment small intestinal layers (villi vs crypts) in feline small intestinal biopsies
@@ -9,17 +9,25 @@ Semantic segmentation (pixel classification)
 ## Model architecture type & platform
 CNN, Aiforia create
 
+## Active version
+fe_si_layers_pv6_mv11
+
 ## Development
 This model was developed by KLJ in Aiforia and assessed by JMW
 
 This and previous project and model versions for small intestinal layer segmentation
-are documented here: 
+are documented here (sheet: fe_si_layers): 
 
 https://docs.google.com/spreadsheets/d/1Bg5ZT4h1TjjKgKP76iZ03OzNSspau0jlSxPWKsOVVXw/edit?usp=sharing
 
-## Testing
+## Tuning
+- KLJ used a small set (n 21) for tuning. Most are from the labl_2020_tuning set but
+some are from labl_2020_training. 
+Documented here: https://drive.google.com/drive/folders/1EEyrtvhzGdj4grLw2vIOUCPeInp1xG9k?usp=sharing
+- JMW did new tuning annotations in qupath, used for initial eval and setting hyperparameters.
+Presented here: https://docs.google.com/presentation/d/1to3PDvGuQhchptxr13hO7236udFKBsHW1gur-ol_wyc/edit?usp=sharing
 
-## Issues / Deviations / Comments
-The google sheets frame documenting project and model versions uses a naming structure
-outlined here: 
-https://docs.google.com/presentation/d/1Me-JiU9mieHEQjz6NjtXAcWRx75MmnYM/edit?usp=sharing&ouid=114290326180405247455&rtpof=true&sd=true
+## Testing
+JMW annotated test set in qupath. Each negative class annotated separately (to
+allow exploration of false positives). 
+

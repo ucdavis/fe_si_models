@@ -1,6 +1,6 @@
 
 // Imports annotations of defined class with fragment numbers from defined input directory (run for project)
-def inputDir = "/Users/jmwulcan/Library/CloudStorage/Box-Box/Projects/fe_si_models/combos/output/process_combos/"
+def inputDir = "/Users/jmwulcan/Library/CloudStorage/Box-Box/Projects/fe_si_models/combos/output/combos/"
 
 def className = "layers" // Update this with your class name
 
