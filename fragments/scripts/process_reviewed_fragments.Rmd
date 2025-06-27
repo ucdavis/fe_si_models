@@ -1,0 +1,72 @@
+---
+title: "process_reviewed_fragments"
+author: "Wulcan"
+date: "2025-06-26"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Objective
+This is to process human reviewed model output for the fragment model.
+Fragments is intended to be a "human-in-the-loop" model with incorrect classificaiton
+corrected by a human. 
+
+SOP for reviewing is outline here:
+https://docs.google.com/presentation/d/1YfRRCdEl74Zuk5TyjnUbfgew9tXjFQsAfE5Ay6-rEjA/edit?usp=sharing
+
+
+## Input
+-<subset>_fragments_reviewed.xlsx (fe_si_models/fragments/output/reviewed_fragments)
+
+## Outpyut
+- fragments_included_<subset>.json
+- fragments_exluded_<subset>.json
+
+```{r}
+library(readxl)
+library(jsonlite)
+library(tidyverse)
+
+process_reviewed_fragments <- function(subset_name, output_dir, fragments_reviewed) {
+
+  fragments_corrected <- fragments_reviewed %>%
+    mutate(classification = case_when(!is.na(corrected_classification) ~ corrected_classification,
+                                      TRUE ~ classification))
+
+  fragments_included <- fragments_corrected %>%
+    filter(is.na(exclude)) %>%
+    filter(classification == "original_fragment") %>%
+    select(image_name:classification)
+
+  fragments_excluded <- fragments_corrected %>%
+    filter(!is.na(exclude) | classification == "duplicate_fragment") %>%
+    mutate(exclusion_reason = case_when(classification == "duplicate_fragment" ~ "duplicate_fragment",
+                                        TRUE ~ exclusion_reason)) %>%
+    select(image_name:classification, exclusion_reason)
+
+  include_path <- paste0(output_dir, "fragments_included_", subset_name, ".json")
+  exclude_path <- paste0(output_dir, "fragments_excluded_", subset_name, ".json")
+  
+  write_json(fragments_included, include_path, pretty = TRUE)
+  write_json(fragments_excluded, exclude_path, pretty = TRUE)
+
+ return(list(fragments_included = fragments_included,
+             fragments_excluded = fragments_excluded))
+}
+```
+
+
+### Process grading_sample (for fe_si_papers/lymphocyte_distribution ...)
+
+```{r}
+subset_name <- "grading_sample"
+
+output_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragments/output/process_reviewed_fragments/"
+
+fragments_reviewed <- read_xlsx(paste0("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragments/output/fragments_reviewed/", subset_name, "_fragments_reviewed.xlsx"))
+
+processed <- process_reviewed_fragments(subset_name, output_dir, fragments_reviewed)
+```

@@ -7,11 +7,18 @@ by "tissue_vs_glass" as input and outputting fragment polygons.
 
 ![Schematic](assets/overview_fragments.png)
 
+
+## Intended use
+This is meant to be a human-in-the-loop model, with the human going over the output
+in qupath and marking fragments for correction of original vs duplicates and exclusion
+
 ## Scripts
 - **fragments.Rmd**
 This script processes tissue polygons to fragments
 - **import_fragments.groovy** 
 This script imports fragments to qupath
+- **process_reviewed_fragments**
+This script cleans up human reviewed fragments and outputs lists of inclusion and exclusions.
 - **validate_fragments**
 This script assess fragment performance (both for identifying single fragments and
 for identifying duplicated fragments)
@@ -25,5 +32,3 @@ for visual assessment.
 Validation outline is here:
 ![Schematic](assets/overview_fragment_validation.png)
 
-## 2DO
-- testing

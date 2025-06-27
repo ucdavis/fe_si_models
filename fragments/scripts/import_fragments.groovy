@@ -1,6 +1,6 @@
 
 //Imports annotation of defined class from defined input dir (run for project)
-def inputDir = "/Users/jmwulcan/Library/CloudStorage/Box-Box/Projects/fe_si_models/fragments/output/fragments/"
+def inputDir = "/Users/jmwulcan/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragments/output/fragments/"
 
 def className = "fragments" 
 
