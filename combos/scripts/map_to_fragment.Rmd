@@ -1,5 +1,5 @@
 ---
-title: "process_combos"
+title: "map_to_fragment"
 author: "Wulcan"
 date: "2025-05-05"
 output: html_document
@@ -10,22 +10,23 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ## Objective
-The objective of this script is to process the aiforia combos models output files to
-separate files for layers, tissues and cells by tissue fragment for further processing
+The objective of this script is to map the aiforia combos output to individual fragments and split them up by component model.
 
 ### Input
-- *subset_<image_subset>.geojson* (fe_si_images/process_subset/)
-Dfs with image names and metadata 
--*<image_name>_<model_version>_by_class.geojson* (fe_si_models/combos/output/<model_version>/)
-Contains geojson files with output coordinates for model_version. Downloaded from aiforia create with aiforia/scripts/get_image_analysis_results.Rmd
+- *subset_<subset_name>.json* (fe_si_images/output/process_subset/)
+- *fragments_inlcuded_subset>.json*
+- *<image_name>_fragments.geojson*(fe_si_models/fragments/output/fragments/)
+fragment coordinates 
+- *<image_name>_<model_version>_processed_ia_results.geojson* (fe_si_platforms/aiforia/output/ai_results)
 
--*<image_name>_fragments.geojson* (fe_si_models/fragments/output/fragments/)
-Contains geometries for tissue fragments - generated with fe_si_models/fragments/scripts/fragments.Rmd
 
 ### Output
-- <image_name>_<fragment_name>_layers_<model_version>.geojson
-- <image_name>_<fragment_name>_tissues_<model_version>.geojson
-- <image_name>_<fragment_name>_cells_<model_version>.geojson
+- *<image_name>_<fragment_name>_<model_version>_<component_model>.geojson*
+- *<image_name>_<fragment_name>_fragments.geojson*
+
+### Issues /Deviations / comments
+- changed the name of epithelium/lamina propria models (and judits_work_keller_lab) from _tissue_ to _compartments_ and added model_version to output files to keep track of origin. Will have to rename / reprocess already processed files.
+-errors when processing the larger images on PC (lenovo) but not on macbook
 
 ```{r, message=FALSE, warning=FALSE}
 library(jsonlite)
@@ -37,12 +38,12 @@ to_box <- "~/Library/CloudStorage/Box-Box/"
 #to_box <- "C:/Users/15303/Box/" #JMW lenovo
 
 #This function takes a vector of image names and arranges them by file size for a model_version output
-arrange_image_names <- function(image_names, model_version, combos_dir){
+arrange_image_names <- function(image_names, model_version, ia_results_dir){
   #Expected file names
   expected_files <- paste(image_names, model_version, "processed_ia_results.geojson", sep = "_")
   
   #List actual files in directory
-  actual_files <- list.files(combos_dir)
+  actual_files <- list.files(ia_results_dir)
   
   #Identify downloaded images
   downloaded_image_results <- image_names[expected_files %in% actual_files]
@@ -57,7 +58,7 @@ arrange_image_names <- function(image_names, model_version, combos_dir){
   
   #Populate df
   for (image in downloaded_image_results){
-    file_path <- paste0(combos_dir, image, "_", model_version, "_processed_ia_results.geojson")
+    file_path <- paste0(ia_results_dir, image, "_", model_version, "_processed_ia_results.geojson")
     
     #Get file size in MB
     file_size_mb <- file.info(file_path)$size / (1024^2)
@@ -82,10 +83,10 @@ arrange_image_names <- function(image_names, model_version, combos_dir){
   return(downloaded_image_files)
 }
 
-process_image_fragments <- function(image_names, model_version, combos_dir, fragments_dir, output_dir) {
+process_image_fragments <- function(image_names, model_version, ia_results_dir, fragments_dir, output_dir, included_fragments) {
 
-  arranged_images <- arrange_image_names(image_names, model_version, combos_dir)
-  arranged_image_names <- arranged_images$image_name
+  arranged_images <- arrange_image_names(image_names, model_version, ia_results_dir)
+  arranged_image_names <- unique(arranged_images$image_name)
 
   files <- list.files(output_dir)
 
@@ -116,19 +117,21 @@ process_image_fragments <- function(image_names, model_version, combos_dir, frag
     image_layers <- image_combos %>%
       filter(classification %in% c("villi", "crypts"))
 
-    image_tissues <- image_combos %>%
+    image_compartments <- image_combos %>%
       filter(classification %in% c("epithelium", "lumen", "lamina_propria"))
 
     image_lymphocytes <- image_combos %>%
       filter(classification == "lymphocytes")
+    
+    image_fragments_included <- included_fragments %>% filter(image_name == image)
 
     fragment_path <- file.path(fragments_dir, paste0(image, "_fragments.geojson"))
 
     image_fragments <- st_read(fragment_path, quiet = TRUE) %>%
       st_set_crs(0) %>%
-      #filter(classification == "included_fragment") %>%
       rename(fragment_name = name) %>%
-      select(-classification, -exclusion_reason, -id, -included)
+      select(-classification, -exclusion_reason, -id, -included) %>%
+      filter(fragment_name %in% image_fragments_included$fragment_name)
 
     # Function to match fragments
     match_fragments <- function(target_data, fragments){
@@ -143,13 +146,13 @@ process_image_fragments <- function(image_names, model_version, combos_dir, frag
     }
 
     layers_by_fragment <- match_fragments(image_layers, image_fragments)
-    tissues_by_fragment <- match_fragments(image_tissues, image_fragments)
+    compartments_by_fragment <- match_fragments(image_compartments, image_fragments)
     lymphocytes_by_fragment <- match_fragments(image_lymphocytes, image_fragments)
 
     for (fragment in image_fragments$fragment_name){
       fragment_fragment <- image_fragments %>% filter(fragment_name == fragment)
       fragment_layers <- layers_by_fragment %>% filter(fragment_name == fragment)
-      fragment_tissues <- tissues_by_fragment %>% filter(fragment_name == fragment)
+      fragment_compartments <- compartments_by_fragment %>% filter(fragment_name == fragment)
       fragment_lymphocytes <- lymphocytes_by_fragment %>% filter(fragment_name == fragment)
 
       # Writing outputs
@@ -159,17 +162,17 @@ process_image_fragments <- function(image_names, model_version, combos_dir, frag
                delete_dsn = TRUE)
 
       st_write(fragment_layers,
-               file.path(output_dir, paste0(image, "_", fragment, "_layers.geojson")),
+               file.path(output_dir, paste0(image, "_", fragment, "_", model_version,"_layers.geojson")),
                quiet = TRUE,
                delete_dsn = TRUE)
 
-      st_write(fragment_tissues,
-               file.path(output_dir, paste0(image, "_", fragment, "_tissues.geojson")),
+      st_write(fragment_compartments,
+               file.path(output_dir, paste0(image, "_", fragment, "_", model_version,"_compartments.geojson")),
                quiet = TRUE,
                delete_dsn = TRUE)
 
       st_write(fragment_lymphocytes,
-               file.path(output_dir, paste0(image, "_", fragment, "_lymphocytes.geojson")),
+              file.path(output_dir, paste0(image, "_", fragment, "_", model_version,"_lymphocytes.geojson")),
                quiet = TRUE,
                delete_dsn = TRUE)
     }
@@ -180,36 +183,54 @@ process_image_fragments <- function(image_names, model_version, combos_dir, frag
 ```
 
 
+### Process grading_sample (for fe_si_papers/lymphocyte_distribution)
+- fragments_included_subset
+
+
+
+```{r, message=FALSE, warning=FALSE}
+
+subset_name <- "grading_sample"
+model_version <- "fe_si_combos_pv2_mv2"
+
+included_fragments <- fromJSON(paste0("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragments/output/process_reviewed_fragments/fragments_included_", subset_name, ".json")) %>%
+  mutate(image_fragment_name = paste(image_name, fragment_name, sep = "_"))
+
+image_names <- unique(included_fragments$image_name)
+image_fragment_names <- unique(included_fragments$image_fragment_name)
+
+model_version <- "fe_si_combos_pv2_mv2"
+
+ia_results_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_platforms/aiforia/output/ia_results/"
+
+fragments_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragments/output/fragments/"
+
+output_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/combos/output/map_to_fragment/"
+
+
+#process_image_fragments(image_names, model_version, ia_results_dir, fragments_dir, output_dir, fragments_included)
+```
+
+
+### REDO THIS AS YOU PROCESS BATCHES - OBS MAY WANT TO KEEP OLD PROCESS SINCE USED FOR VALIDATIING COMPONENT MODELS    
 ### Process image fragment for labl_2020_tuning model fe_si_combos_pv2_mv2
 Processes image fragments for labl_2020 tuning image if the results for the corresponding model has been downloaded
-####  Input
-- subset_labl_2020_tuning.json (fe_si_images/output/process_subset/)
-- *<image_name>_fe_si_combos_pv2_mv2_processed_ia_results.geojson.geojson* (fe_si_models/combos/output/fe_si_combos_pv2_mv2/)
-Results downloaded from aiforia and processed with "get_image_analysis_results.Rmd" (aiforia/scripts)
-- *<image_name>_fragments.geojson*(fe_si_models/fragments/output/fragments/)
-fragment cooridnates 
-
-#### Output
-- *<image_name>_<fragment_name>_fragment.geojson*
-- *<image_name>_<fragment_name>_layers.geojson*
-- *<image_name>_<fragment_name>_tissues.geojson*
-- *<image_name>_<fragment_name>_lymphocytes.geojson*
 
 #### Issues/Deviations
 Got errors when processing the larger images on PC (lenovo) but not on macbook
 
 ```{r, message=FALSE, warning=FALSE}
-subset_labl_2020_tuning <- fromJSON(paste0(to_box,"Projects/fe_si_images/output/process_subset/subset_labl_2020_tuning.json"))
+subset_labl_2020_tuning <- fromJSON(paste0(to_box,"judits_work_keller_lab/fe_si_images/output/process_subset/subset_labl_2020_tuning.json"))
 
 image_names <- subset_labl_2020_tuning$image_name
 
 model_version <- "fe_si_combos_pv2_mv2"
 
-combos_dir <- paste0(to_box, "Projects/fe_si_models/combos/output/aiforia_ia_results/")
+combos_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/combos/output/aiforia_ia_results/")
 
-fragments_dir <- paste0(to_box, "Projects/fe_si_models/fragments/output/fragments/")
+fragments_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/fragments/output/fragments/")
 
-output_dir <- paste0(to_box, "Projects/fe_si_models/combos/output/process_combos/")
+output_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/combos/output/combos_duplicate/")
 
 
 process_image_fragments(image_names, model_version, combos_dir, fragments_dir, output_dir)
@@ -235,17 +256,17 @@ fragment cooridnates
 
 
 ```{r, message=FALSE, warning=FALSE}
-subset_labl_2020_training <- fromJSON(paste0(to_box,"Projects/fe_si_images/output/process_subset/subset_labl_2020_training.json"))
+subset_labl_2020_training <- fromJSON(paste0(to_box,"judits_work_keller_lab/fe_si_images/output/process_subset/subset_labl_2020_training.json"))
 
 image_names <- subset_labl_2020_training$image_name
 
 model_version <- "fe_si_combos_pv2_mv2"
 
-combos_dir <- paste0(to_box, "Projects/fe_si_models/combos/output/aiforia_ia_results/")
+combos_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/combos/output/aiforia_ia_results/")
 
-fragments_dir <- paste0(to_box, "Projects/fe_si_models/fragments/output/fragments/")
+fragments_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/fragments/output/fragments/")
 
-output_dir <- paste0(to_box, "Projects/fe_si_models/combos/output/process_combos/")
+output_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/combos/output/process_combos/")
 
 
 process_image_fragments(image_names, model_version, combos_dir, fragments_dir, output_dir)
@@ -271,18 +292,54 @@ fragment coordinates
 Processed both "included" and "duplicate" fragment because that labels doesn't work as well for this subset
 
 ```{r, message=FALSE, warning=FALSE}
-subset_labl_2025_clonality <- fromJSON(paste0(to_box,"Projects/fe_si_images/output/process_subset/subset_labl_2025_clonality.json"))
+subset_labl_2025_clonality <- fromJSON(paste0(to_box,"judits_work_keller_lab/fe_si_images/output/process_subset/subset_labl_2025_clonality.json"))
 
 image_names <- subset_labl_2025_clonality$image_name
 
 model_version <- "fe_si_combos_pv2_mv2"
 
-combos_dir <- paste0(to_box, "Projects/fe_si_models/combos/output/aiforia_ia_results/")
+combos_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/combos/output/aiforia_ia_results/")
 
-fragments_dir <- paste0(to_box, "Projects/fe_si_models/fragments/output/fragments/")
+fragments_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/fragments/output/fragments/")
 
-output_dir <- paste0(to_box, "Projects/fe_si_models/combos/output/process_combos/")
+output_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/combos/output/process_combos/")
 
 
 process_image_fragments(image_names, model_version, combos_dir, fragments_dir, output_dir)
 ```
+
+### Process image fragment for labl_2020_test model fe_si_combos_pv2_mv2
+Processes image fragments for labl_2020 training image if the results for the corresponding model has been downloaded
+####  Input
+- subset_labl_2020_test.json (fe_si_images/output/process_subset/)
+- *<image_name>_fe_si_combos_pv2_mv2_processed_ia_results.geojson* (fe_si_models/combos/output/fe_si_combos_pv2_mv2/)
+Results downloaded from aiforia and processed with "get_image_analysis_results.Rmd" (aiforia/scripts)
+- *<image_name>_fragments.geojson*(fe_si_models/fragments/output/fragments/)
+fragment coordinates 
+
+#### Output
+- *<image_name>_<fragment_name>_fragment.geojson*
+- *<image_name>_<fragment_name>_layers.geojson*
+- *<image_name>_<fragment_name>_tissues.geojson*
+- *<image_name>_<fragment_name>_lymphocytes.geojson*
+
+#### Issues/Deviations
+
+
+```{r, message=FALSE, warning=FALSE}
+subset_labl_2020_test <- fromJSON(paste0(to_box,"judits_work_keller_lab/fe_si_images/output/process_subset/subset_labl_2020_test.json"))
+
+image_names <- subset_labl_2020_test$image_name
+
+model_version <- "fe_si_combos_pv2_mv2"
+
+combos_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/combos/output/aiforia_ia_results/")
+
+fragments_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/fragments/output/fragments/")
+
+output_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/combos/output/process_combos/")
+
+
+process_image_fragments(image_names, model_version, combos_dir, fragments_dir, output_dir)
+```
+
