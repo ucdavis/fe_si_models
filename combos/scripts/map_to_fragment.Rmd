@@ -208,7 +208,7 @@ fragments_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_mo
 output_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/combos/output/map_to_fragment/"
 
 
-#process_image_fragments(image_names, model_version, ia_results_dir, fragments_dir, output_dir, fragments_included)
+process_image_fragments(image_names, model_version, ia_results_dir, fragments_dir, output_dir, fragments_included)
 ```
 
 
