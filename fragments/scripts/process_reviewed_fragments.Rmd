@@ -20,11 +20,14 @@ https://docs.google.com/presentation/d/1YfRRCdEl74Zuk5TyjnUbfgew9tXjFQsAfE5Ay6-r
 
 ## Input
 -<subset>_fragments_reviewed.xlsx (fe_si_models/fragments/output/reviewed_fragments)
+- images_fragments_reviewed.json (fe_si_models/fragments/output/processed_reviewed_fragments)
+To keep track -update with each batch
 
-## Outpyut
+## Output
 - fragments_included_<subset>.json
 - fragments_exluded_<subset>.json
-
+- images_fragments_reviewed.json (fe_si_models/fragments/output/processed_reviewed_fragments)
+To keep track -update with each batch
 ```{r}
 library(readxl)
 library(jsonlite)
@@ -69,4 +72,8 @@ output_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_model
 fragments_reviewed <- read_xlsx(paste0("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragments/output/fragments_reviewed/", subset_name, "_fragments_reviewed.xlsx"))
 
 processed <- process_reviewed_fragments(subset_name, output_dir, fragments_reviewed)
+
+images_fragments_reviewed <- unique(fragments_reviewed$image_name)
+
+write_json(images_fragments_reviewed, "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragments/output/process_reviewed_fragments/images_fragments_reviewed.json", pretty = TRUE) 
 ```
