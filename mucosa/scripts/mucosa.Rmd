@@ -53,6 +53,7 @@ library(sf)
 library(jsonlite)
 library(writexl)
 library(readxl)
+Sys.setenv(OGR_GEOJSON_MAX_OBJ_SIZE = "0") #Allows processing of large files
 
 to_box <- "~/Library/CloudStorage/Box-Box/"
 
@@ -263,7 +264,7 @@ process_mucosa <- function(model_version,
         
         if (nrow(compartments) == 0) {
           mucosa <- mucosa %>%
-            mutate(artefact_class = inadequate,
+            mutate(artefact_class = "inadequate",
                    quality_villi_1000_um2 = 0,
                    quality_crypts_1000_um2 = 0,
                    quality_pct_villi = NA,
@@ -496,12 +497,13 @@ orientation_marginal_th <-  10
 artefact_adequate_th <- 95
 artefact_marginal_th <- 70
 
+
+
 mucosa_metadata_subset <- process_mucosa(model_version, subset, fragment_metadata, fragment_dir, map_to_fragment_dir, mucosa_dir)
 
 
-
+write_json(mucosa_metadata_subset, "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/mucosa/output/mucosa/mucosa_metadata_grading_sample.json", pretty = TRUE)
 ```
-
 
 
 
