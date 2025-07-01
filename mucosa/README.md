@@ -32,4 +32,5 @@ I use a human-in-the-loop approach to filter non-si fragments prior to applicati
 adequate and marginal orientation is suboptimal, but filters out inadequate 
 orientation well. For artefact it is over sensitive for inadequate, but reasonably
 specific. 
-- The validation_si_mucosa script works on a previous version - update needed 
+- The folder 'historic_versions' contains earlier script version when orientation (si_mucosa)
+and artefact classification were separate scripts. validation_si_mucosa script works on a previous version - update needed 

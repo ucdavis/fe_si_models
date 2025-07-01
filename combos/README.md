@@ -33,4 +33,4 @@ with minor variations in label and class names, the subfolder "mapped_ai_output
 contains output for an earlier version of "map_to_mucosa" w other fragment model
 paramters etc. Similarly "Input" contains an excel with manual assessment of the mucosa with
 pilot assessment of ai performance. Scripts contain a previous attempt to 
-filter FP lymphocytes in epithelium based on size (unsuccessful) Keep for traceability for now.
+filter FP lymphocytes in epithelium based on size (unsuccess	ful) Keep for traceability for now.
