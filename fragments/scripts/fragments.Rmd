@@ -62,7 +62,7 @@ but after merging with villi/crypts probably.
 -  duplicate fragment sets that are unusually close to each other are not identified 
 as separate fragment sets and thus not excluded. Prioritized not "overcalling" duplicates
 when setting these parameters to not loose fragments.
-
+- rarely the simplification causes invalid outputs - in cases this happen I have added error checks that instead processed the unsimplified tissue
 
 
 ```{r libraries, directories, functions, message=FALSE}
@@ -74,11 +74,12 @@ Sys.setenv(OGR_GEOJSON_MAX_OBJ_SIZE = 0)
 library(nngeo) #remove holes in outline
 options(scipen = 999) #turn of scientific notation
 
-to_box <- "~/Library/CloudStorage/Box-Box/"
+#to_box <- "~/Library/CloudStorage/Box-Box/"
+to_box <- "C:/Users/15303/Box/"
 
 generate_fragments <- function(subset,
                                tissue_dir,
-                               output_dir,
+                               fragment_dir,
                                tolerance_value = 150,
                                merge_buffer_um = 35,
                                separate_buffer_um = 25,
@@ -89,15 +90,48 @@ generate_fragments <- function(subset,
                                ) {
   
   
+  checkpoint_file <- file.path(fragment_dir, "subset_fragment_metadata_checkpoint.rds")
+  
+  log_meta <- function(df){
+    subset_fragment_metadata <<- bind_rows(subset_fragment_metadata, df)
+    saveRDS(subset_fragment_metadata, checkpoint_file)
+  }
   
   
-  fragments_metadata_set <- data.frame(
-    image_name = character(),
-    fragment_name = character(),
-    classification = character(),
-    fragment_area_um2 = character()
+  subset_fragment_metadata <-
+    if(file.exists(checkpoint_file)) readRDS(checkpoint_file) else NULL
+  
+  log_file <- file.path(fragment_dir, "simplify_errors.csv")
+  if (!file.exists(log_file)) {
+    readr::write_csv(
+      tibble::tibble(time   = character(),
+                     image  = character(),
+                     stage  = character(),
+                     err    = character()),
+      log_file
     )
+  }
   
+  safe_step <- function(expr, stage, img) {
+    tryCatch(
+      expr,
+      error = function(e) {
+        # 2a) append to the csv log  
+        readr::write_csv(
+          tibble::tibble(
+            time  = format(Sys.time(), "%Y-%m-%d %H:%M:%S"),
+            image = img,
+            stage = stage,
+            err   = e$message
+            ),
+          log_file,
+          append = TRUE
+          )
+        message("❌  ", img, " failed at ", stage, " (", e$message, ")")
+        return(NULL)
+      }
+    )
+  }
   
   
   for (row in 1:nrow(subset)) {
@@ -128,14 +162,45 @@ generate_fragments <- function(subset,
     tissue <- st_read(coordinate_file_path, quiet = TRUE) %>%
       st_set_crs(0)
     
-    #Process tissue coordinates to preliminary fragments
-    tissue_simplified <- tissue %>%
-      st_remove_holes() %>%
-      st_simplify(dTolerance = tolerance_value)
+    if (!st_is_valid(tissue)) {
+      message("⚠️  ", image_name, " has invalid geometry, running st_make_valid()")
+      tissue <- st_make_valid(tissue)
+    }
     
+    if (!st_is_valid(tissue)) {
+      print(st_is_valid_reason(tissue))
+      # skip the slide but keep the loop running
+      next 
+    }
+    
+    tissue_noholes <- safe_step(
+      tissue %>% st_remove_holes(),
+      stage = "st_remove_holes",
+      img   = image_name
+      )
+    if (is.null(tissue_noholes)) next 
+    
+    tissue_simplified <- safe_step(
+      tissue_noholes %>%
+        st_make_valid() %>%
+        st_simplify(dTolerance = tolerance_value) %>%
+        st_make_valid(),
+      stage = "st_simplify",
+      img   = image_name
+      )
+    
+    if (is.null(tissue_simplified)) {
+    # fall back: use the *unsimplified* version and keep going
+      tissue_simplified <- tissue_noholes
+      }
+
+  
     preliminary_fragment <- st_buffer(tissue_simplified, dist = merge_buffer_px) %>%
+      st_make_valid() %>% 
       st_buffer(dist = -separate_buffer_px) %>%
+      st_make_valid() %>% 
       st_cast("POLYGON") %>%
+      st_make_valid() %>% 
       st_as_sf() %>%
       mutate(
         image_name = image_name,
@@ -155,11 +220,15 @@ generate_fragments <- function(subset,
     fragments <- filtered_preliminary_fragments %>%
       st_buffer(dist = expand_buffer_px)
     
+    safe_union <- function(x) {
+      tryCatch(st_union(x), error = function(e) {
+        message("GEOS error on union for ", image_name, ": ", e$message)
+        st_make_valid(st_union(st_make_valid(x)))
+      })
+    }
     
-    #Identify fragment sets 
-    fragments_united <- fragments  %>%
-      st_union() %>%
-      st_remove_holes()
+    fragments_united <- fragments %>% safe_union() %>% st_remove_holes()
+  
     
     fragment_sets <- st_buffer(fragments_united, dist = set_buffer_px) %>%
       st_cast('POLYGON') %>%
@@ -251,7 +320,13 @@ generate_fragments <- function(subset,
         classification = ifelse(included, "original_fragment", "duplicate_fragment")) %>%
       select(-overlaps_include)
     
-    file_name_fragments <- paste0(output_dir, image_name, "_fragments.geojson")
+    if (!all(st_is_valid(fragments))) {
+      warning("Some fragments still invalid on ", image_name, 
+              "; attempting auto-repair before writing.")
+      fragments <- st_make_valid(fragments)
+      }
+    
+    file_name_fragments <- paste0(fragment_dir, image_name, "_fragments.geojson")
     st_write(fragments, file_name_fragments, driver = "GeoJSON", delete_dsn = TRUE, quiet = TRUE)
     
     fragments_metadata_slide <- fragments %>%
@@ -259,18 +334,14 @@ generate_fragments <- function(subset,
       rename(fragment_name = name) %>%
       select(image_name, fragment_name, classification, fragment_area_px2, fragment_area_um2)
     
-    fragments_metadata_set <- rbind(fragments_metadata_set, fragments_metadata_slide)
+    log_meta(fragments_metadata_slide)
+    
   }
   
-  return(fragments_metadata_set)
+  return(subset_fragment_metadata)
   
 }
 
-
-
-#Create a json to keep track of all fragments processed ever
-#all_fragment_metadata <- NULL
-#write_json(all_fragment_metadata, "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragments/output/fragments/fragments_metadata.json", pretty =TRUE)
 
 ```
 
@@ -285,18 +356,18 @@ subset_labl_2020_training <- fromJSON("~/Library/CloudStorage/Box-Box/judits_wor
 
 tissue_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/tissue_vs_glass/output/export_tissue/")
 
-output_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/fragments/output/fragments/")
+fragment_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/fragments/output/fragments/")
 
 
-template <- generate_fragments(subset_labl_2020_training, tissue_dir, output_dir)
+template <- generate_fragments(subset_labl_2020_training, tissue_dir, fragment_dir)
 
-write_json(template, paste0(output_dir, "fragment_metadata_labl_2020_training.json"))
+write_json(template, paste0(fragment_dir, "fragment_metadata_labl_2020_training.json"))
 
 all_fragment_metadata <- fromJSON("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragments/output/fragments/fragments_metadata.json")
 
 all_fragment_metadata <- bind_rows(all_fragment_metadata, template)
 
-write_json(all_fragment_metadata, paste0(output_dir, "fragments_metadata.json"))
+write_json(all_fragment_metadata, paste0(fragment_dir, "fragments_metadata.json"))
 ```
 
 
@@ -312,23 +383,23 @@ subset_labl_2020_tuning <- fromJSON("~/Library/CloudStorage/Box-Box/judits_work_
 
 tissue_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/tissue_vs_glass/output/export_tissue/")
 
-output_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/fragments/output/fragments/")
+fragment_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/fragments/output/fragments/")
 
 
-template_tuning <- generate_fragments(subset_labl_2020_tuning, tissue_dir, output_dir)
+template_tuning <- generate_fragments(subset_labl_2020_tuning, tissue_dir, fragment_dir)
 
-write_json(template_tuning, paste0(output_dir, "fragment_metadata_labl_2020_tuning.json"), pretty = TRUE)
+write_json(template_tuning, paste0(fragment_dir, "fragment_metadata_labl_2020_tuning.json"), pretty = TRUE)
 
-write_xlsx(template_tuning, paste0(output_dir, "template_fragments_labl_2020_tuning.xlsx"))
+write_xlsx(template_tuning, paste0(fragment_dir, "template_fragments_labl_2020_tuning.xlsx"))
 
-template_tuning <- fromJSON(paste0(output_dir, "fragment_metadata_labl_2020_tuning.json"))
-write_xlsx(template_tuning, paste0(output_dir, "template_fragments_labl_2020_tuning.xlsx"))
+template_tuning <- fromJSON(paste0(fragment_dir, "fragment_metadata_labl_2020_tuning.json"))
+write_xlsx(template_tuning, paste0(fragment_dir, "template_fragments_labl_2020_tuning.xlsx"))
 
 all_fragment_metadata <- fromJSON("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragments/output/fragments/fragments_metadata.json")
 
 all_fragment_metadata <- bind_rows(all_fragment_metadata, template_tuning)
 
-write_json(all_fragment_metadata, paste0(output_dir, "fragments_metadata.json"))
+write_json(all_fragment_metadata, paste0(fragment_dir, "fragments_metadata.json"))
 ```
 
 
@@ -349,20 +420,20 @@ unprocessed <- subset_labl_2025_clonality %>%
 
 tissue_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/tissue_vs_glass/output/export_tissue/")
 
-output_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/fragments/output/fragments/")
+fragment_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/fragments/output/fragments/")
 
 
-template <- generate_fragments(unprocessed, tissue_dir, output_dir)
+template <- generate_fragments(unprocessed, tissue_dir, fragment_dir)
 
 all_fragment_metadata <- bind_rows(all_fragment_metadata, template)
 
-write_json(all_fragment_metadata, paste0(output_dir, "fragments_metadata.json"))
+write_json(all_fragment_metadata, paste0(fragment_dir, "fragments_metadata.json"))
 
 fragment_metadata_labl_2025_clonality <- all_fragment_metadata %>% filter(image_name %in% subset_labl_2025_clonality$image_name)
 
-write_json(fragment_metadata_labl_2025_clonality, paste0(output_dir, "fragment_metadata_labl_2025_clonality.json"), pretty = TRUE)
+write_json(fragment_metadata_labl_2025_clonality, paste0(fragment_dir, "fragment_metadata_labl_2025_clonality.json"), pretty = TRUE)
 
-write_xlsx(fragment_metadata_labl_2025_clonality, paste0(output_dir, "template_fragments_labl_2025_clonality.xlsx"))
+write_xlsx(fragment_metadata_labl_2025_clonality, paste0(fragment_dir, "template_fragments_labl_2025_clonality.xlsx"))
 
 ```
 
@@ -383,19 +454,19 @@ unprocessed <- subset_labl_2020_test %>%
 
 tissue_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/tissue_vs_glass/output/export_tissue/")
 
-output_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/fragments/output/fragments/")
+fragment_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/fragments/output/fragments/")
 
-template <- generate_fragments(unprocessed, tissue_dir, output_dir)
+template <- generate_fragments(unprocessed, tissue_dir, fragment_dir)
 
 all_fragment_metadata <- bind_rows(all_fragment_metadata, template)
 
-write_json(all_fragment_metadata, paste0(output_dir, "fragments_metadata.json"))
+write_json(all_fragment_metadata, paste0(fragment_dir, "fragments_metadata.json"))
 
 fragment_metadata_labl_2020_test <- all_fragment_metadata %>% filter(image_name %in% subset_labl_2020_test$image_name)
 
-write_json(fragment_metadata_labl_2020_test, paste0(output_dir, "fragment_metadata_labl_2020_test.json"), pretty = TRUE)
+write_json(fragment_metadata_labl_2020_test, paste0(fragment_dir, "fragment_metadata_labl_2020_test.json"), pretty = TRUE)
 
-write_xlsx(fragment_metadata_labl_2020_test, paste0(output_dir, "template_fragments_labl_2025_test.xlsx"))
+write_xlsx(fragment_metadata_labl_2020_test, paste0(fragment_dir, "template_fragments_labl_2025_test.xlsx"))
 
 ```
 
@@ -417,20 +488,20 @@ unprocessed <- subset_he_vsi %>%
 
 tissue_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/tissue_vs_glass/output/export_tissue/")
 
-output_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/fragments/output/fragments/")
+fragment_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/fragments/output/fragments/")
 
 
-template <- generate_fragments(unprocessed, tissue_dir, output_dir)
+template <- generate_fragments(unprocessed, tissue_dir, fragment_dir)
 
 all_fragment_metadata <- bind_rows(all_fragment_metadata, template)
 
-write_json(all_fragment_metadata, paste0(output_dir, "fragments_metadata.json"))
+write_json(all_fragment_metadata, paste0(fragment_dir, "fragments_metadata.json"))
 
 fragment_metadata_he_vsi<- all_fragment_metadata %>% filter(image_name %in% subset_he_vsi$image_name)
 
-write_json(fragment_metadata_he_vsi, paste0(output_dir, "fragment_metadata_he_vsi.json"), pretty = TRUE)
+write_json(fragment_metadata_he_vsi, paste0(fragment_dir, "fragment_metadata_he_vsi.json"), pretty = TRUE)
 
-write_xlsx(fragment_metadata_he_vsi, paste0(output_dir, "template_fragments_he_vsi.xlsx"))
+write_xlsx(fragment_metadata_he_vsi, paste0(fragment_dir, "template_fragments_he_vsi.xlsx"))
 
 filtered <- subset_he_vsi %>% filter(image_name %in% fragment_metadata_he_vsi$image_name)
 
@@ -439,7 +510,7 @@ file_paths_for_qupath <- filtered$file_path
 writeLines(file_paths_for_qupath, "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragments/output/fragments_file_paths_for_qupath_he_vsi.txt")
 ```
 
-### Analyze grading_sample (for fe_si_papers/lymphocyte_distribution_patterns...)
+### Analyze grading_sample (batch 0) (for fe_si_papers/lymphocyte_distribution_patterns...)
 
 #### Input
 - fragments_metadata.json (fe_si_models/fragments/output/fragments)
@@ -458,7 +529,7 @@ to read into qupath for human-in-the-loop assessment
 ```{r, message=FALSE, warning=FALSE}
 
 #all previously processed grading_samples
-all_fragment_metadata <- fromJSON("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragments/output/fragments/fragments_metadata.json")
+all_fragment_metadata <- fromJSON(paste0(to_box, "judits_work_keller_lab/fe_si_models/fragments/output/fragments/fragments_metadata.json"))
 
 subset_name <- "grading_sample"
 
@@ -466,7 +537,7 @@ subset <- fromJSON(paste0(to_box, "judits_work_keller_lab/fe_si_images/output/pr
 
 subset_image_names <- subset$image_name
 
-fragment_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragments/output/fragments/"
+fragment_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/fragments/output/fragments/")
 
 processed_files <- list.files(path = fragment_dir, full.names = FALSE)
 
@@ -509,3 +580,80 @@ file_paths_for_qupath <- filtered$file_path
 
 writeLines(file_paths_for_qupath, paste0(fragment_dir, subset_name, "_processed_fragments.txt"))
 ```
+
+### Analyze batch_1 (for fe_si_papers/lymphocyte_distribution_patterns...)
+
+#### Input
+- fragments_metadata.json (fe_si_models/fragments/output/fragments)
+file to keep track of all previously processed fragments
+- subset_<subset_name>.json (fe_si_images/output/process_subset/)
+- <image>_tissue_1.geojson (fe_si_models/tissue_vs_glass/output/export_tissue/)
+
+#### Output
+- <image_name>_fragments.geojson (fe_si_models/fragments/output/fragments)
+with fragment coordinates
+- fragment_metadata_<subset>.json (fe_si_models/fragments/output/fragments)
+- template_fragments_<subset>.json (fe_si_models/fragments/output/fragments)
+for human-in-the-loop to correct duplicates and mark fragments for exclusion
+- <subset>_processed_fragments.txt (fe_si_models/fragments/output/fragments)
+to read into qupath for human-in-the-loop assessment
+```{r, message=FALSE, warning=FALSE}
+
+#all previously processed grading_samples
+all_fragment_metadata <- fromJSON(paste0(to_box, "judits_work_keller_lab/fe_si_models/fragments/output/fragments/fragments_metadata.json"))
+
+
+subset_name <- "batch_1"
+
+subset <- fromJSON(paste0(to_box, "judits_work_keller_lab/fe_si_images/output/process_subset/subset_", subset_name, ".json"))
+
+subset_image_names <- subset$image_name
+
+fragment_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/fragments/output/fragments/")
+
+processed_files <- list.files(path = fragment_dir, full.names = FALSE)
+
+unprocessed_images <- subset_image_names[
+  !vapply(subset_image_names, function(x) any(startsWith(processed_files, x)), logical(1))
+]
+
+tissue_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/tissues/output/export_tissue/")
+
+available_tissue <- list.files(path = tissue_dir, full.names = FALSE)
+
+unprocessed_available_tissue_images <- unprocessed_images[
+  vapply(unprocessed_images, function(x) any(startsWith(available_tissue, x)), logical(1))
+]
+
+subset_to_process <- subset %>% filter(image_name %in% unprocessed_available_tissue_images)
+
+
+template <- generate_fragments(subset_to_process, tissue_dir, fragment_dir)
+
+
+write_json(template, paste0(fragment_dir, "fragment_metadata_batch_1.json"), pretty = TRUE)
+
+fragment_template <- template %>% 
+  select(image_name, fragment_name, classification) %>%
+  mutate(corrected_classification = "",
+         exclude = "",
+         exclusion_reason = "")
+
+write_xlsx(fragment_template, paste0(fragment_dir, "template_fragments_batch_1.xlsx"))
+
+all_fragment_metadata <- bind_rows(all_fragment_metadata, template)
+
+write_json(all_fragment_metadata, paste0(fragment_dir, "fragments_metadata.json"), pretty = TRUE)
+
+file_paths_for_qupath_lenovo <- subset$file_path
+writeLines(file_paths_for_qupath_lenovo, paste0(fragment_dir, subset_name, "_processed_fragments.txt"))
+```
+
+
+
+
+
+
+
+
+
