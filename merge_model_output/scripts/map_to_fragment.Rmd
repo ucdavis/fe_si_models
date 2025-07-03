@@ -10,7 +10,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ## Objective
-The objective of this script is to map the aiforia combos output to individual fragments and split them up by component model.
+The objective of this script is to map the aiforia output to individual fragments and split them up by component model.
 
 ### Input
 - *subset_<subset_name>.json* (fe_si_images/output/process_subset/)
@@ -25,6 +25,7 @@ fragment coordinates
 - *<image_name>_<fragment_name>_fragments.geojson*
 
 ### Issues /Deviations / comments
+- this used to be in an fe_si_models folder "combos" moved to new folder "merged_model_output" to better reflect functionality in pipeline
 - changed the name of epithelium/lamina propria models (and judits_work_keller_lab) from _tissue_ to _compartments_ and added model_version to output files to keep track of origin. Will have to rename / reprocess already processed files.
 -errors when processing the larger images on PC (lenovo) but not on macbook
 
@@ -205,7 +206,7 @@ ia_results_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_p
 
 fragments_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragments/output/fragments/"
 
-output_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/combos/output/map_to_fragment/"
+output_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/merge_model_output/output/map_to_fragment/"
 
 
 process_image_fragments(image_names, model_version, ia_results_dir, fragments_dir, output_dir, fragments_included)
