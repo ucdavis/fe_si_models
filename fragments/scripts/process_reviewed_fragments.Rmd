@@ -62,7 +62,7 @@ process_reviewed_fragments <- function(subset_name, output_dir, fragments_review
 ```
 
 
-### Process grading_sample (for fe_si_papers/lymphocyte_distribution ...)
+### Process grading_sample (batch_0) (for fe_si_papers/lymphocyte_distribution ...)
 
 ```{r}
 subset_name <- "grading_sample"
@@ -76,4 +76,17 @@ processed <- process_reviewed_fragments(subset_name, output_dir, fragments_revie
 images_fragments_reviewed <- unique(fragments_reviewed$image_name)
 
 write_json(images_fragments_reviewed, "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragments/output/process_reviewed_fragments/images_fragments_reviewed.json", pretty = TRUE) 
+```
+
+### Process batch_1 (for fe_si_papers/lymphocyte_distribution ...)
+
+```{r}
+subset_name <- "batch_1"
+
+output_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragments/output/process_reviewed_fragments/"
+
+fragments_reviewed <- read_xlsx(paste0("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragments/output/fragments_reviewed/", subset_name, "_fragments_reviewed.xlsx"))
+
+processed <- process_reviewed_fragments(subset_name, output_dir, fragments_reviewed)
+
 ```
