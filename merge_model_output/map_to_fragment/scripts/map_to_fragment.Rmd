@@ -84,6 +84,26 @@ arrange_image_names <- function(image_names, model_version, ia_results_dir){
   return(downloaded_image_files)
 }
 
+read_sf_retry <- function(path, retries = 3, wait = 5) {
+  attempt <- 1
+  while (attempt <= retries) {
+    msg <- sprintf("  ↳ trying to open %s (attempt %d/%d)…", basename(path),
+                   attempt, retries)
+    cat(msg, "\n")
+
+    x <- tryCatch(
+      st_read(path, quiet = TRUE) |> st_set_crs(0),
+      error = function(e) NULL            # swallow the error, return NULL
+    )
+
+    if (!is.null(x)) return(x)            # success → return the object
+
+    Sys.sleep(wait)                       # wait a bit and try again
+    attempt <- attempt + 1
+  }
+  stop("failed")                          # let caller know it never worked
+}
+
 process_image_fragments <- function(image_names, model_version, ia_results_dir, fragments_dir, output_dir, included_fragments) {
 
   arranged_images <- arrange_image_names(image_names, model_version, ia_results_dir)
@@ -100,87 +120,106 @@ process_image_fragments <- function(image_names, model_version, ia_results_dir, 
   ]
 
   no_fragments_with_si_layers <- c()
+  
+  failed_files <- character() 
 
   for (image in not_in_files){
     cat("Processing image", image, "\n")
-
-    file_data <- arranged_images %>% filter(image_name == image)
-
-    image_combos <- st_read(file_data$file_path, quiet = TRUE) %>%
-      st_set_crs(0) %>%
-      #add confidence pct to name
-      mutate(
-        name = paste0(
-          str_replace_all(tolower(name), " ", "_"),
-          "_conf_pct_",
-          round(confidence_percentage)))
-
-    image_layers <- image_combos %>%
-      filter(classification %in% c("villi", "crypts"))
-
-    image_compartments <- image_combos %>%
-      filter(classification %in% c("epithelium", "lumen", "lamina_propria"))
-
-    image_lymphocytes <- image_combos %>%
-      filter(classification == "lymphocytes")
     
-    image_fragments_included <- included_fragments %>% filter(image_name == image)
-
-    fragment_path <- file.path(fragments_dir, paste0(image, "_fragments.geojson"))
-
-    image_fragments <- st_read(fragment_path, quiet = TRUE) %>%
-      st_set_crs(0) %>%
-      rename(fragment_name = name) %>%
-      select(-classification, -exclusion_reason, -id, -included) %>%
-      filter(fragment_name %in% image_fragments_included$fragment_name)
-
-    # Function to match fragments
-    match_fragments <- function(target_data, fragments){
-      intersection_indices <- st_intersects(target_data, fragments, sparse = TRUE)
-      indices <- sapply(intersection_indices, function(x) if (length(x) > 0) x[1] else NA)
-      valid_indices <- !is.na(indices)
-
-      matched_data <- target_data[valid_indices, ] %>%
-        filter(st_geometry_type(.) %in% c("POLYGON", "MULTIPOLYGON"))
-
-      st_intersection(matched_data, fragments)
+    tryCatch({
+      file_data <- arranged_images %>% filter(image_name == image)
+      
+      image_combos <- read_sf_retry(file_data$file_path) %>%
+        st_set_crs(0) %>%
+        #add confidence pct to name
+        mutate(
+          name = paste0(
+            str_replace_all(tolower(name), " ", "_"),
+            "_conf_pct_",
+            round(confidence_percentage)))
+      
+      image_layers <- image_combos %>%
+        filter(classification %in% c("villi", "crypts"))
+      
+      image_compartments <- image_combos %>%
+        filter(classification %in% c("epithelium", "lumen", "lamina_propria"))
+      
+      image_lymphocytes <- image_combos %>%
+        filter(classification == "lymphocytes")
+      
+      image_fragments_included <- included_fragments %>% filter(image_name == image)
+      
+      fragment_path <- file.path(fragments_dir, paste0(image, "_fragments.geojson"))
+      
+      image_fragments <- read_sf_retry(fragment_path) %>%
+        st_set_crs(0) %>%
+        rename(fragment_name = name) %>%
+        select(-classification, -exclusion_reason, -id, -included) %>%
+        filter(fragment_name %in% image_fragments_included$fragment_name)
+      
+      # Function to match fragments
+      match_fragments <- function(target_data, fragments){
+        intersection_indices <- st_intersects(target_data, fragments, sparse = TRUE)
+        indices <- sapply(intersection_indices, function(x) if (length(x) > 0) x[1] else NA)
+        valid_indices <- !is.na(indices)
+        
+        matched_data <- target_data[valid_indices, ] %>%
+          filter(st_geometry_type(.) %in% c("POLYGON", "MULTIPOLYGON"))
+        
+        st_intersection(matched_data, fragments)
+      }
+      
+      layers_by_fragment <- match_fragments(image_layers, image_fragments)
+      compartments_by_fragment <- match_fragments(image_compartments, image_fragments)
+      lymphocytes_by_fragment <- match_fragments(image_lymphocytes, image_fragments)
+      
+      for (fragment in image_fragments$fragment_name){
+        fragment_fragment <- image_fragments %>% filter(fragment_name == fragment)
+        fragment_layers <- layers_by_fragment %>% filter(fragment_name == fragment)
+        fragment_compartments <- compartments_by_fragment %>% filter(fragment_name == fragment)
+        fragment_lymphocytes <- lymphocytes_by_fragment %>% filter(fragment_name == fragment)
+        
+        # Writing outputs
+        
+        st_write(fragment_fragment,
+                 file.path(output_dir, paste0(image, "_", fragment, "_fragment.geojson")),
+                 quiet = TRUE,
+                 delete_dsn = TRUE)
+        
+        st_write(fragment_layers,
+                 file.path(output_dir, paste0(image, "_", fragment, "_",
+                                              model_version,"_layers.geojson")),
+                 quiet = TRUE,
+                 delete_dsn = TRUE)
+        
+        st_write(fragment_compartments,
+                 file.path(output_dir, paste0(image, "_", fragment, "_",
+                                              model_version,"_compartments.geojson")),
+                 quiet = TRUE,
+                 delete_dsn = TRUE)
+        
+        st_write(fragment_lymphocytes,
+                 file.path(output_dir, paste0(image, "_", fragment, "_",
+                                              model_version,"_lymphocytes.geojson")),
+                 quiet = TRUE,
+                 delete_dsn = TRUE)
+      }
+      
+      }, error = function(e) {                # only runs when read_sf_retry gave up
+        cat("  ⚠︎ gave up on", image, "→", conditionMessage(e), "\n")
+        failed_files <<- c(failed_files, image)
+      })
     }
-
-    layers_by_fragment <- match_fragments(image_layers, image_fragments)
-    compartments_by_fragment <- match_fragments(image_compartments, image_fragments)
-    lymphocytes_by_fragment <- match_fragments(image_lymphocytes, image_fragments)
-
-    for (fragment in image_fragments$fragment_name){
-      fragment_fragment <- image_fragments %>% filter(fragment_name == fragment)
-      fragment_layers <- layers_by_fragment %>% filter(fragment_name == fragment)
-      fragment_compartments <- compartments_by_fragment %>% filter(fragment_name == fragment)
-      fragment_lymphocytes <- lymphocytes_by_fragment %>% filter(fragment_name == fragment)
-
-      # Writing outputs
-      st_write(fragment_fragment,
-               file.path(output_dir, paste0(image, "_", fragment, "_fragment.geojson")),
-               quiet = TRUE,
-               delete_dsn = TRUE)
-
-      st_write(fragment_layers,
-               file.path(output_dir, paste0(image, "_", fragment, "_", model_version,"_layers.geojson")),
-               quiet = TRUE,
-               delete_dsn = TRUE)
-
-      st_write(fragment_compartments,
-               file.path(output_dir, paste0(image, "_", fragment, "_", model_version,"_compartments.geojson")),
-               quiet = TRUE,
-               delete_dsn = TRUE)
-
-      st_write(fragment_lymphocytes,
-              file.path(output_dir, paste0(image, "_", fragment, "_", model_version,"_lymphocytes.geojson")),
-               quiet = TRUE,
-               delete_dsn = TRUE)
-    }
+  if (length(failed_files)) {
+  cat("\nThe following images never synced / could not be read:\n",
+      paste("-", failed_files), sep = "\n")
   }
-
+  
   cat("Processing completed.\n")
 }
+
+    
+
 ```
 
 
