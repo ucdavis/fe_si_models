@@ -652,6 +652,73 @@ writeLines(file_paths_for_qupath_lenovo, paste0(fragment_dir, subset_name, "_pro
 
 
 
+### Analyze batch_2 (for fe_si_papers/lymphocyte_distribution_patterns...)
+
+#### Input
+- fragments_metadata.json (fe_si_models/fragments/output/fragments)
+file to keep track of all previously processed fragments
+- subset_<subset_name>.json (fe_si_images/output/process_subset/)
+- <image>_tissue_1.geojson (fe_si_models/tissue_vs_glass/output/export_tissue/)
+
+#### Output
+- <image_name>_fragments.geojson (fe_si_models/fragments/output/fragments)
+with fragment coordinates
+- fragment_metadata_<subset>.json (fe_si_models/fragments/output/fragments)
+- template_fragments_<subset>.json (fe_si_models/fragments/output/fragments)
+for human-in-the-loop to correct duplicates and mark fragments for exclusion
+- <subset>_processed_fragments.txt (fe_si_models/fragments/output/fragments)
+to read into qupath for human-in-the-loop assessment
+```{r, message=FALSE, warning=FALSE}
+
+#all previously processed grading_samples
+all_fragment_metadata <- fromJSON(paste0(to_box, "judits_work_keller_lab/fe_si_models/fragments/output/fragments/fragments_metadata.json"))
+
+
+subset_name <- "batch_2"
+
+subset <- fromJSON(paste0(to_box, "judits_work_keller_lab/fe_si_images/output/process_subset/subset_", subset_name, ".json"))
+
+subset_image_names <- subset$image_name
+
+fragment_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/fragments/output/fragments/")
+
+processed_files <- list.files(path = fragment_dir, full.names = FALSE)
+
+unprocessed_images <- subset_image_names[
+  !vapply(subset_image_names, function(x) any(startsWith(processed_files, x)), logical(1))
+]
+
+tissue_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/tissues/output/export_tissue/")
+
+available_tissue <- list.files(path = tissue_dir, full.names = FALSE)
+
+unprocessed_available_tissue_images <- unprocessed_images[
+  vapply(unprocessed_images, function(x) any(startsWith(available_tissue, x)), logical(1))
+]
+
+subset_to_process <- subset %>% filter(image_name %in% unprocessed_available_tissue_images)
+
+
+template <- generate_fragments(subset_to_process, tissue_dir, fragment_dir)
+
+
+write_json(template, paste0(fragment_dir, "fragment_metadata_", subset_name,".json"), pretty = TRUE)
+
+fragment_template <- template %>% 
+  select(image_name, fragment_name, classification) %>%
+  mutate(corrected_classification = "",
+         exclude = "",
+         exclusion_reason = "")
+
+write_xlsx(fragment_template, paste0(fragment_dir, "template_fragments_", subset_name, ".xlsx"))
+
+all_fragment_metadata <- bind_rows(all_fragment_metadata, template)
+
+write_json(all_fragment_metadata, paste0(fragment_dir, "fragments_metadata.json"), pretty = TRUE)
+
+file_paths_for_qupath_lenovo <- subset$file_path
+writeLines(file_paths_for_qupath_lenovo, paste0(fragment_dir, subset_name, "_processed_fragments.txt"))
+```
 
 
 
