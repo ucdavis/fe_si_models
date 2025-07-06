@@ -1,0 +1,575 @@
+---
+title: "mucosa"
+author: "Wulcan"
+date: "2025-05-24"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Objective
+The objective of this model is to isolate the mucosa in fragments of small intestine,
+and classify them based on orientation and artefact.
+
+This is a rule-based model where the parameters were set by trying different values and inspecting
+resulting polygons in QuPath
+
+## Parameters
+- *min_area_1000_um*: Small intestinal mucosa polygons under this size are filtered out before being assigned names, default is 100 (100,000 um2)
+- *high_conf_lim*: Mucosal layers under this confidence levels are not considered when classifying
+mucosa polygons as small intestinal mucosa or not (but are still used for outlining the small intestinal mucosal polygons, and for calculating percentages). Default is 100 %.
+- *orientation_adequate_th*: The percentages of villi, crypts, portion of circumference of villi or crypts overlapping with the circumference of the others needs all to be above this to be considered adequate. Default is 30 %.
+- *orientation_marginal_th*: The percentages of villi, crypts, portion of circumference of villi or crypts overlapping with the circumference of the others needs all to be above this (but not all to be above the adequate th to be considered marginal. If any is under it is inadequate.  Default is 10%.
+- *artefact_adequate_th*
+Default 95
+- *artefact_marginal_th* 
+Default 70
+
+
+## Input
+- *subset_<subset>.json* (fe_si_images/process_subset/output/process_subset/)
+- *fragments_metadata_<subset>.json* (fe_si_images/fragments/output/fragments/)
+- *included_fragments_<subset>.json* (fe_si_images/fragments/output/process_reviewed_fragments/)
+- *<image>_fragments.geojson* (fe_si_models/fragments/output/fragments/)
+- *<image>_<fragment>_<model_version>_layers.geojson* (fe_si_models/combos/output/map_to_fragments/)
+- *<image>_<fragment>_<model_version>_.geojson* (fe_si_models/combos/output/map_to_fragments/)
+
+## Output
+- *<image_name>_<fragment_name>_<mucosa_name>_mucosa.geojson* (fe_si_models/mucosa/output/mucosa/)
+- *mucosa_metadata_<subset>.json*
+- *mucosa_metadata.json*
+For all processed fragments
+
+
+
+## Issues/Deviations/Comments/2 Do
+
+
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(sf)
+library(jsonlite)
+library(writexl)
+library(readxl)
+Sys.setenv(OGR_GEOJSON_MAX_OBJ_SIZE = "0") #Allows processing of large files
+
+to_box <- "~/Library/CloudStorage/Box-Box/"
+
+process_mucosa <- function(model_version,
+                           subset, 
+                           fragment_metadata, 
+                           fragment_dir, 
+                           map_to_fragment_dir, 
+                           mucosa_dir, 
+                           min_area_1000_um2 = 100,
+                           high_conf_limit = 100,
+                           orientation_adequate_th = 30,
+                           orientation_marginal_th = 10,
+                           artefact_adequate_th = 95,
+                           artefact_marginal_th = 70
+                           ){
+  
+  checkpoint_file <- file.path(mucosa_dir, "subset_mucosa_metadata_checkpoint.rds")
+  
+  log_meta <- function(df){               # df is st_drop_geometry(mucosa)
+    subset_mucosa_metadata <<- dplyr::bind_rows(subset_mucosa_metadata, df)
+    saveRDS(subset_mucosa_metadata, checkpoint_file)  # instant disk backup
+  }
+
+  image_names <- unique(fragment_metadata$image_name)
+  image_fragment_names <- unique(fragment_metadata$image_fragment_name)
+  
+  subset_mucosa_metadata <-
+  if (file.exists(checkpoint_file)) readRDS(checkpoint_file) else NULL
+  
+  for (image_fragment in image_fragment_names){
+    
+    #get image metadata
+    image_fragment_fragment_metadata <- fragment_metadata %>% 
+      filter(image_fragment_name == image_fragment)
+    
+    img <- image_fragment_fragment_metadata$image_name
+    frag <- image_fragment_fragment_metadata$fragment_name
+    
+    image_metadata <- subset %>% filter(image_name == img)
+    pixel_area_um2 <- image_metadata$pixel_area_um2
+    pixel_length_um <- image_metadata$pixel_length_um
+    
+    #Read in and process layers 
+    layer_path <- paste0(map_to_fragment_dir, image_fragment, "_", model_version, "_layers.geojson")
+    layers <- st_read(layer_path, quiet = TRUE) %>% st_set_crs(0)
+    
+    #Handle cases with no layers (no recognized villi or crypts of any confidence)
+    
+    if (nrow(layers) == 0) {
+      fragment_path <- paste0(fragment_dir, img, "_fragments.geojson")
+      mucosa <- st_read(fragment_path, quiet = TRUE) %>%
+        st_set_crs(0) %>%
+        filter(name == frag) %>%
+        rename(fragment_name = name) %>%
+        mutate(mucosa_name = "00",
+               name = paste(image_name, fragment_name, mucosa_name, sep = "_"),
+               classification = "no_mucosa",
+               orientation_class = NA,
+               artefact_class = NA,
+               area_1000_um2 = fragment_area_um2 / 1000,
+               villi_area_1000_um2 = 0,
+               crypts_area_1000_um2 = 0,
+               pct_villi = 0,
+               pct_crypts = 0,
+               pct_shared_border_villi = NA,
+               pct_shared_border_crypts = NA,
+               quality_villi_1000_um2 = NA,
+               quality_crypts_1000_um2 = NA,
+               quality_pct_villi = NA,
+               quality_pct_crypts = NA) %>%
+        select(image_name, fragment_name, mucosa_name, name, classification, orientation_class, artefact_class, area_1000_um2, villi_area_1000_um2, crypts_area_1000_um2, pct_villi, pct_crypts, pct_shared_border_villi, pct_shared_border_crypts, quality_villi_1000_um2, quality_crypts_1000_um2, quality_pct_villi, quality_pct_crypts, geometry)
+      
+       st_write(mucosa, paste0(mucosa_dir, mucosa$name, "_mucosa.geojson"), quiet = TRUE, delete_dsn = TRUE)
+       
+        log_meta(st_drop_geometry(mucosa))
+        
+        next
+    }
+    
+     #Unite classes in compartments (epithelium, lamina propria and lumen to identify areas of ok quality)
+    
+    #Unite the different layers to si_mucosa polygons (may vary in number per fragment)
+    mucosa_draft <- layers %>%
+      group_by(image_name, fragment_name, objectType, isLocked) %>%
+      summarize(geometry = st_union(geometry)) %>%
+      st_cast("POLYGON") %>%
+      ungroup() %>%
+      mutate(classification = "mucosa",
+             area_px2 = st_area(geometry),
+             area_um2 = area_px2 * pixel_area_um2,
+             area_1000_um2 = area_um2 / 1000) %>%
+      filter(area_1000_um2 > min_area_1000_um2) %>%
+      mutate(mucosa_name = str_pad(rank(-area_px2, ties.method = "first"), width = 2, pad = "0"),
+             name = paste(img, frag, mucosa_name, sep = "_")) %>%
+      select(image_name, fragment_name, mucosa_name, name, classification, area_1000_um2) %>%
+      arrange(name)
+  
+    #Unite each class of layers to calculate percentages of each and intersection
+    
+    #Only high confidence layers are used to decide if small intestine or not
+    #layers_high_conf_united <- layers %>%
+     # mutate(confidence_percentage = round(confidence_percentage)) %>%
+      #filter(confidence_percentage == high_conf_limit) %>%
+      #group_by(image_name, fragment_name, objectType, isLocked, classification) %>%
+      #summarise(geometry = st_union(geometry), .groups = "drop")
+    
+    #villi_high_conf <- layers_high_conf_united %>% filter(classification == "villi")
+    #crypts_high_conf <- layers_high_conf_united %>% filter(classification == "crypts")
+    
+    #Layers of all confidence levels are used for calculating percentages used for orientation
+    layers_all_conf_united <- layers %>%
+      group_by(image_name, fragment_name, objectType, isLocked, classification) %>%
+      summarise(geometry = st_union(geometry), .groups = "drop")
+    
+    villi <- layers_all_conf_united %>% filter(classification == "villi")
+    crypts <- layers_all_conf_united %>% filter(classification == "crypts")
+    
+    compartments_path <- paste0(map_to_fragment_dir, image_fragment, "_", model_version, "_compartments.geojson")
+    
+    compartments <- st_read(compartments_path, quiet = TRUE) %>% st_set_crs(0)
+    
+    #Process by individual mucosa polygons within fragments
+    
+     for (muc_part in mucosa_draft$mucosa_name) {
+       
+       mucosa_part <- mucosa_draft %>% filter(mucosa_name == muc_part)
+       mucosa_geom <- mucosa_part %>% select(name, geometry)
+       
+       #villi_high <- st_intersection(villi_high_conf, mucosa_geom) %>%
+        #mutate(area_px2 = st_area(geometry),
+         #      area_um2 = area_px2 * pixel_area_um2,
+          #     area_1000_um2 = area_um2 / 1000,
+           #    circumference_px = st_length(st_boundary(geometry)))
+       
+        #crypts_high <- st_intersection(crypts_high_conf, mucosa_geom) %>%
+        #mutate(area_px2 = st_area(geometry),
+         #      area_um2 = area_px2 * pixel_area_um2,
+          #     area_1000_um2 = area_um2 / 1000,
+           #    circumference_px = st_length(st_boundary(geometry)))
+        
+        villi_all_conf <- st_intersection(villi, mucosa_geom) %>%
+        mutate(area_px2 = st_area(geometry),
+               area_um2 = area_px2 * pixel_area_um2,
+               area_1000_um2 = area_um2 / 1000,
+               circumference_px = st_length(st_boundary(geometry)))
+        
+        crypts_all_conf <- st_intersection(crypts, mucosa_geom) %>%
+        mutate(area_px2 = st_area(geometry),
+               area_um2 = area_px2 * pixel_area_um2,
+               area_1000_um2 = area_um2 / 1000,
+               circumference_px = st_length(st_boundary(geometry)))
+        
+        #Classify orientation
+        if (nrow(villi_all_conf) == 0 && nrow(crypts_all_conf) == 0) {
+        mucosa <- mucosa_part %>%
+          mutate(classification = "no_mucosa",
+                 orientation_class = NA,
+                 villi_area_1000_um2 = 0,
+                 crypts_area_1000_um2 = 0,
+                 pct_villi = 0, pct_crypts = 0,
+                 pct_shared_border_villi = NA,
+                 pct_shared_border_crypts = NA)
+        } else if (nrow(villi_all_conf) == 0 && nrow(crypts_all_conf) != 0) {
+        mucosa <- mucosa_part %>%
+          mutate(orientation_class= "inadequate",
+                 villi_area_1000_um2 = 0,
+                 crypts_area_1000_um2 = crypts_all_conf$area_1000_um2,
+                 pct_villi = 0, pct_crypts = 100,
+                 pct_shared_border_villi = NA,
+                 pct_shared_border_crypts = NA)
+        } else if (nrow(villi_all_conf) != 0 && nrow(crypts_all_conf) == 0) {
+        mucosa <- mucosa_part %>%
+          mutate(orientation_class = "inadequate",
+                 villi_area_1000_um2 = villi_all_conf$area_1000_um2,
+                 crypts_area_1000_um2 =0,
+                 pct_villi = 100, pct_crypts = 0,
+                 pct_shared_border_villi = NA,
+                 pct_shared_border_crypts = NA)
+        } else {
+        shared_border <- st_intersection(st_boundary(villi_all_conf), st_boundary(crypts_all_conf))
+        
+        shared_len <- st_length(shared_border)
+        
+        villi_part <- villi_all_conf %>%
+          mutate(pct_shared_border = (shared_len / circumference_px) * 100)
+        
+        crypts_part <- crypts_all_conf %>%
+          mutate(pct_shared_border = (shared_len / circumference_px) * 100)
+        
+        mucosa <- mucosa_part %>%
+          mutate(villi_area_1000_um2 = villi_all_conf$area_1000_um2,
+                 crypts_area_1000_um2 = crypts_all_conf$area_1000_um2,
+                 pct_villi = (villi_area_1000_um2 / area_1000_um2) * 100,
+                 pct_crypts = (crypts_area_1000_um2 / area_1000_um2) * 100,
+                 pct_shared_border_villi = villi_part$pct_shared_border,
+                 pct_shared_border_crypts = crypts_part$pct_shared_border,
+                 orientation_class = case_when(
+                   pct_villi > orientation_adequate_th & pct_crypts > orientation_adequate_th &
+                     pct_shared_border_villi > orientation_adequate_th & pct_shared_border_crypts > orientation_adequate_th ~ "adequate",
+                   pct_villi > orientation_marginal_th & pct_crypts > orientation_marginal_th &
+                     pct_shared_border_villi > orientation_marginal_th & pct_shared_border_crypts > orientation_marginal_th ~ "marginal",
+                   pct_villi <= orientation_marginal_th | pct_crypts <= orientation_marginal_th |
+                     pct_shared_border_villi <= orientation_marginal_th | pct_shared_border_crypts <= orientation_marginal_th ~ "inadequate",
+                   TRUE ~ NA_character_
+                 ))
+        }
+        
+        if (nrow(compartments) == 0) {
+          mucosa <- mucosa %>%
+            mutate(artefact_class = "inadequate",
+                   quality_villi_1000_um2 = 0,
+                   quality_crypts_1000_um2 = 0,
+                   quality_pct_villi = NA,
+                   quality_pct_crypts = NA,
+                   classification = paste(classification, "orientation", orientation_class, "artefact", artefact_class, sep = "_")) %>%
+            select(image_name, fragment_name, mucosa_name, name, classification, orientation_class, artefact_class, area_1000_um2, villi_area_1000_um2, crypts_area_1000_um2, pct_villi, pct_crypts, pct_shared_border_villi, pct_shared_border_crypts, quality_villi_1000_um2, quality_crypts_1000_um2, quality_pct_villi, quality_pct_crypts, geometry)
+      
+       st_write(mucosa, paste0(mucosa_dir, mucosa$name, "_mucosa.geojson"), quiet = TRUE, delete_dsn = TRUE)
+       
+        log_meta(st_drop_geometry(mucosa))
+        
+        next
+    }
+        
+        compartments_united  <- compartments %>%
+          group_by(image_name, fragment_name, objectType, isLocked) %>%
+          summarise(geometry = st_union(geometry), .groups = "drop") %>%
+          mutate(classification = "quality_tissue")
+        
+        
+        
+        #Classify orientation
+        villi_geom <- villi_all_conf%>% select(name, geometry)
+        crypts_geom <- crypts_all_conf %>% select(name, geometry)
+        
+         quality_villi <- st_intersection(compartments_united, villi_geom) %>%
+           mutate(area_px2 = st_area(geometry),
+                  area_um2 = area_px2 * pixel_area_um2,
+                  area_1000_um2 = area_um2 / 1000)
+         
+         quality_crypts <- st_intersection(compartments_united, crypts_geom) %>%
+           mutate(area_px2 = st_area(geometry),
+                  area_um2 = area_px2 * pixel_area_um2,
+                  area_1000_um2 = area_um2 / 1000)
+         
+        if (nrow(villi_all_conf) == 0 && nrow(crypts_all_conf) == 0) {
+           mucosa <- mucosa  %>%
+             mutate(villi_area_1000_um2 = 0,
+                    crypts_area_1000_um2 = 0,
+                    quality_villi_1000_um2 = NA,
+                    quality_crypts_1000_um2 = NA,
+                    quality_pct_villi = NA,
+                    quality_pct_crypts = NA,
+                    artefact_class = NA)
+           } else if (nrow(villi_all_conf) == 0 && 
+                      nrow(crypts_all_conf) != 0 && 
+                      nrow(quality_crypts) == 0 ) {
+             mucosa <- mucosa  %>%
+             mutate(villi_area_1000_um2 = 0,
+                    crypts_area_1000_um2 = crypts_all_conf$area_1000_um2,
+                    quality_villi_1000_um2 = NA,
+                    quality_crypts_1000_um2 = 0,
+                    quality_pct_villi = NA,
+                    quality_pct_crypts = NA,
+                    artefact_class = "inadequate"
+                    ) 
+           } else if (nrow(villi_all_conf) == 0 && 
+                      nrow(crypts_all_conf) != 0 && 
+                      nrow(quality_crypts) == !0 ) {
+             mucosa <- mucosa  %>%
+             mutate(villi_area_1000_um2 = 0,
+                    crypts_area_1000_um2 = crypts_all_conf$area_1000_um2,
+                    quality_villi_1000_um2 = NA,
+                    quality_crypts_1000_um2 = quality_crypts$area_1000_um2,
+                    quality_pct_villi = NA,
+                    quality_pct_crypts = (quality_crypts_1000_um2 / crypts_area_1000_um2) * 100,
+                    artefact_class = "inadequate"
+                    ) 
+           } else if (nrow(villi_all_conf) != 0 && 
+                      nrow(crypts_all_conf) == 0 && 
+                      nrow(quality_villi) == 0 ) {
+             mucosa <- mucosa  %>%
+             mutate(villi_area_1000_um2 = villi_all_conf$area_1000_um2,
+                    crypts_area_1000_um2 = 0,
+                    quality_villi_1000_um2 = 0,
+                    quality_crypts_1000_um2 = NA,
+                    quality_pct_villi = NA,
+                    quality_pct_crypts = NA,
+                    artefact_class = "inadequate"
+                    ) 
+           } else if (nrow(villi_all_conf) != 0 && 
+                      nrow(crypts_all_conf) == 0 && 
+                      nrow(quality_villi) != 0 ) {
+             mucosa <- mucosa  %>%
+             mutate(villi_area_1000_um2 = villi_all_conf$area_1000_um2,
+                    crypts_area_1000_um2 = 0,
+                    quality_villi_1000_um2 = quality_villi$area_1000_um2,
+                    quality_crypts_1000_um2 = NA,
+                    quality_pct_villi = (quality_villi_1000_um2 / villi_area_1000_um2) * 100,
+                    quality_pct_crypts = NA,
+                    artefact_class = "inadequate"
+                    ) 
+             
+           } else if (nrow(villi_all_conf) != 0 && 
+                      nrow(crypts_all_conf) != 0 && 
+                      nrow(quality_villi) == 0 && 
+                      nrow(quality_crypts) == 0) {
+             mucosa <- mucosa  %>%
+             mutate(villi_area_1000_um2 = villi_all_conf$area_1000_um2,
+                    crypts_area_1000_um2 = crypts_all_conf$area_1000_um2,
+                    quality_villi_1000_um2 = 0,
+                    quality_crypts_1000_um2 = 0,
+                    quality_pct_villi = 0,
+                    quality_pct_crypts = 0,
+                    artefact_class = "inadequate"
+                    ) 
+           } else if (nrow(villi_all_conf) != 0 && 
+                      nrow(crypts_all_conf) != 0 && 
+                      nrow(quality_villi) != 0 && 
+                      nrow(quality_crypts) == 0) {
+             mucosa <- mucosa  %>%
+             mutate(villi_area_1000_um2 = villi_all_conf$area_1000_um2,
+                    crypts_area_1000_um2 = crypts_all_conf$area_1000_um2,
+                    quality_villi_1000_um2 = quality_villi$area_1000_um2,
+                    quality_crypts_1000_um2 = 0,
+                    quality_pct_villi = (quality_villi_1000_um2 / villi_area_1000_um2) * 100,
+                    quality_pct_crypts = 0,
+                    artefact_class = "inadequate"
+                    ) 
+             
+           } else if (nrow(villi_all_conf) != 0 && 
+                      nrow(crypts_all_conf) != 0 && 
+                      nrow(quality_villi) == 0 && 
+                      nrow(quality_crypts) != 0) {
+             mucosa <- mucosa  %>%
+             mutate(villi_area_1000_um2 = villi_all_conf$area_1000_um2,
+                    crypts_area_1000_um2 = crypts_all_conf$area_1000_um2,
+                    quality_villi_1000_um2 = 0,
+                    quality_crypts_1000_um2 = quality_crypts$area_1000_um2,
+                    quality_pct_villi = NA,
+                    quality_pct_crypts = (quality_crypts_1000_um2 / crypts_area_1000_um2) * 100,
+                    artefact_class = "inadequate"
+                    ) 
+           } else if (nrow(villi_all_conf) != 0 && 
+                      nrow(crypts_all_conf) != 0 && 
+                      nrow(quality_villi) != 0 && 
+                      nrow(quality_crypts) != 0) {
+             mucosa <- mucosa  %>%
+             mutate(villi_area_1000_um2 = villi_all_conf$area_1000_um2,
+                    crypts_area_1000_um2 = crypts_all_conf$area_1000_um2,
+                    quality_villi_1000_um2 = quality_villi$area_1000_um2,
+                    quality_crypts_1000_um2 = quality_crypts$area_1000_um2,
+                    quality_pct_villi = (quality_villi_1000_um2 / villi_area_1000_um2) * 100,
+                    quality_pct_crypts = (quality_crypts_1000_um2 / crypts_area_1000_um2) * 100) %>%
+               mutate(artefact_class = case_when(
+                 quality_pct_crypts > artefact_adequate_th  & quality_pct_villi > artefact_adequate_th ~ "adequate",
+                 quality_pct_crypts > artefact_marginal_th & quality_pct_villi > artefact_marginal_th ~ "marginal",
+                 quality_pct_crypts <= artefact_marginal_th | quality_pct_villi <= artefact_marginal_th ~ "inadequate",
+                 TRUE ~ NA_character_))
+           }
+             
+         
+         mucosa <- mucosa %>%
+           mutate(classification = paste(classification, "orientation", orientation_class, "artefact", artefact_class, sep = "_")) %>%
+           select(image_name, 
+                  fragment_name, 
+                  mucosa_name, 
+                  name, 
+                  classification, 
+                  orientation_class, 
+                  artefact_class, 
+                  area_1000_um2, 
+                  villi_area_1000_um2, 
+                  crypts_area_1000_um2, 
+                  pct_villi, pct_crypts, 
+                  pct_shared_border_villi, 
+                  pct_shared_border_crypts, 
+                  quality_villi_1000_um2, 
+                  quality_crypts_1000_um2, 
+                  quality_pct_villi, 
+                  quality_pct_crypts, geometry)
+         
+        
+        st_write(mucosa, paste0(mucosa_dir, mucosa$name, "_mucosa.geojson"), quiet = TRUE, delete_dsn = TRUE)
+        
+        log_meta(st_drop_geometry(mucosa))
+     }
+  }
+  
+   return(subset_mucosa_metadata)
+  
+}
+```
+
+
+#### Process grading_sample (fe_si_papers/lymphocyte_distribution/)
+
+
+```{r, message=FALSE, warning=FALSE}
+
+subset_name <- "grading_sample"
+model_version <- "fe_si_combos_pv2_mv2"
+
+included_fragments <- fromJSON(paste0("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragments/output/process_reviewed_fragments/fragments_included_", subset_name, ".json")) %>%
+  mutate(image_fragment_name = paste(image_name, fragment_name, sep = "_"))
+
+image_fragment_names <- unique(included_fragments$image_fragment_name)
+image_names <- unique(included_fragments$image_name)
+
+subset <- fromJSON(paste0("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_images/output/process_subset/subset_", subset_name, ".json")) %>%
+  filter(image_name %in% included_fragments$image_name)
+
+fragment_metadata <- fromJSON(paste0("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragments/output/fragments/fragment_metadata_", subset_name,".json")) %>%
+  mutate(image_fragment_name = paste(image_name, fragment_name, sep = "_")) %>%
+  filter(image_fragment_name %in% included_fragments$image_fragment_name)
+
+fragment_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragments/output/fragments/"
+
+map_to_fragment_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/combos/output/map_to_fragment/"
+
+mucosa_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/mucosa/output/mucosa/"
+
+
+
+#Check that all images have downloaded and processed layer files
+map_to_fragment_files <- list.files(map_to_fragment_dir)
+matching_image_fragment_names <- image_fragment_names[
+  sapply(image_fragment_names, function(name) any(startsWith(map_to_fragment_files, name)))
+  ]
+
+non_matching_image_fragment_names <- image_fragment_names[
+  !sapply(image_fragment_names, function(name) any(startsWith(map_to_fragment_files, name)))
+]
+
+
+min_area_1000_um2 <- 100
+high_conf_limit <- 100
+orientation_adequate_th <- 30
+orientation_marginal_th <-  10
+artefact_adequate_th <- 95
+artefact_marginal_th <- 70
+
+
+
+mucosa_metadata_subset <- process_mucosa(model_version, subset, fragment_metadata, fragment_dir, map_to_fragment_dir, mucosa_dir)
+
+
+write_json(mucosa_metadata_subset, "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/mucosa/output/mucosa/mucosa_metadata_grading_sample.json", pretty = TRUE)
+```
+
+
+
+
+
+
+#### Process subset_labl_2020_tuning
+PREVIOUS VERSION - USED FOR ESTIMATING TUNING PERFORMANCE 
+Mucosa and artefact processed separately
+
+```{r, message=FALSE, warning=FALSE}
+
+fragment_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/fragments/output/fragments/")
+combos_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/combos/output/combos/"
+output_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/si_mucosa/output/si_mucosa/"
+
+
+subset <- fromJSON("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_images/output/process_subset/subset_labl_2020_tuning.json")
+
+fragment_metadata <- fromJSON("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragments/output/fragments/fragments_metadata.json") 
+
+#Check that all images are run in fragment script (unlikely to be run and not have fragments)
+
+subset_without_fragments <- subset %>% filter(!image_name %in% fragment_metadata$image_name)
+fragment_list <- fragment_metadata %>% filter(image_name %in% subset$image_name)
+
+#Check that all images have downloaded and processed layer files
+layer_files <- list.files(combos_dir)
+matching_image_fragment_names <- image_fragment_names[
+  sapply(image_fragment_names, function(name) any(startsWith(layer_files, name)))
+  ]
+
+
+min_area_1000_um2 <- 100
+high_conf_limit <- 100
+adequate_th <- 30
+marginal_th <-  10
+
+template_si_mucosa_labl_2020_tuning <- process_si_mucosa(subset, fragment_list, fragment_dir, combos_dir, output_dir)
+
+write_xlsx(template_si_mucosa_labl_2020_tuning, paste0(output_dir, "template_si_mucosa_labl_2020_tuning.xlsx"))
+
+write_json(template_si_mucosa_labl_2020_tuning, paste0(output_dir, "template_si_mucosa_labl_2020_tuning.json"))
+
+```
+
+
+        
+
+
+    
+    
+      
+      
+      
+      
+      
+      
+    
+      
+    
+      
+      
+    
+
+
+
+
+

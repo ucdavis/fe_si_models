@@ -1,0 +1,461 @@
+---
+title: "mapped_ai_output"
+author: "Wulcan"
+date: "2025-06-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Objective
+Map ai output to included small intestinal mucosa
+
+### Issues / Deviations
+This is slow. Revisit original code at bottom before function to see if that was faster - try smma_04_01 as test (took hours for function)
+
+```{r, warning=FALSE, message=FALSE}
+library(jsonlite)
+library(tidyverse)
+library(sf)
+
+#When merging geometries sometimes linestrings are created - these slow down further mapping
+filter_out_line_geometries <- function(sf_df, geom_col = "geometry") {
+  sf_df %>%
+    filter(
+      !st_geometry_type(.data[[geom_col]]) %in% c("LINESTRING", "MULTILINESTRING", "GEOMETRYCOLLECTION")
+    )
+}
+
+#To filter a centroid to a region 
+filter_objects_in_region <- function(object_centroids, region_geom) {
+  intersection_indices <- st_intersects(object_centroids, region_geom, sparse = TRUE)
+
+  object_indices <- sapply(intersection_indices, function(x) if (length(x) > 0) x[1] else NA)
+
+  stopifnot(length(object_indices) == nrow(object_centroids))
+
+  object_centroids %>%
+    mutate(tissue_index = object_indices) %>%
+    filter(!is.na(tissue_index))
+}
+
+#to process ai output by included mucosa region
+map_ai_output <- function(muc, included_mucosa_list, artefact_dir, combos_dir, output_dir) {
+  
+  message("Processing mucosa ", muc)
+
+  mucosa_list <- included_mucosa_list %>% filter(name == muc)
+  image_fragment <- paste(mucosa_list$image_name, mucosa_list$fragment_name, sep = "_")
+
+  # Read mucosa artefacts
+  mucosa_path <- file.path(artefact_dir, paste0(muc, "_si_artefact.geojson"))
+  mucosa <- st_read(mucosa_path, quiet = TRUE) %>% st_set_crs(0) %>%
+    rename(artefact_class = classification)
+  mucosa_geom <- mucosa %>% select(name, geometry)
+
+  # Read layers
+  layers_path <- file.path(combos_dir, paste0(image_fragment, "_layers.geojson"))
+  layers <- st_read(layers_path, quiet = TRUE) %>% st_set_crs(0) %>%
+    rename(layers_name = name) %>%
+    mutate(mucosa_name = mucosa$mucosa_name)
+
+  layers_intersection <- st_intersection(layers, mucosa_geom)
+
+  # Union layers by classification
+  union_layer <- function(class_label) {
+    layers_intersection %>%
+      filter(classification == class_label) %>%
+      group_by(image_name, fragment_name, mucosa_name, classification, objectType, isLocked) %>%
+      summarise(geometry = st_union(geometry), .groups = "drop") %>%
+      mutate(name = paste(muc, classification, sep = "_")) 
+  }
+
+  villi_geom  <- union_layer("villi") %>%
+      select(name, geometry)
+  crypts_geom <- union_layer("crypts") %>%
+      select(name, geometry)
+
+  # Read tissues and intersect
+  tissues_path <- file.path(combos_dir, paste0(image_fragment, "_tissues.geojson"))
+  tissues <- st_read(tissues_path, quiet = TRUE) %>% st_set_crs(0) %>%
+    rename(tissues_name = name) %>%
+    mutate(mucosa_name = mucosa$mucosa_name)
+
+  tissues_villi <- st_intersection(tissues, villi_geom) %>%
+    filter_out_line_geometries() %>%
+    mutate(name = paste(name, classification, sep = "_"))
+
+  tissues_crypts <- st_intersection(tissues, crypts_geom) %>%
+    filter_out_line_geometries() %>%
+    mutate(name = paste(name, classification, sep = "_"))
+
+  # Helper to unify tissues by classification
+  union_tissue <- function(tissues, label, compartment) {
+    tissues %>%
+      filter(classification == compartment) %>%
+      group_by(image_name, fragment_name, mucosa_name, name, classification, objectType, isLocked) %>%
+      summarise(geometry = st_union(geometry), .groups = "drop") %>%
+      mutate(classification = paste(label, compartment, sep = "_"))
+  }
+
+  villi_epithelium_geom       <- union_tissue(tissues_villi, "villi", "epithelium") %>% select(name, geometry)
+  villi_lamina_propria_geom   <- union_tissue(tissues_villi, "villi", "lamina_propria") %>% select(name, geometry)
+  villi_lumen_united          <- union_tissue(tissues_villi, "villi", "lumen")
+  crypts_epithelium_geom      <- union_tissue(tissues_crypts, "crypts", "epithelium") %>% select(name, geometry)
+  crypts_lamina_propria_geom  <- union_tissue(tissues_crypts, "crypts", "lamina_propria") %>% select(name, geometry)
+  crypts_lumen_united         <- union_tissue(tissues_crypts, "crypts", "lumen")
+
+  # Read and clean lymphocytes
+  lymphocytes_path <- file.path(combos_dir, paste0(image_fragment, "_lymphocytes.geojson"))
+  lymphocytes <- st_read(lymphocytes_path, quiet = TRUE) %>%
+    st_set_crs(0) %>%
+    mutate(area = st_area(geometry)) %>%
+    group_by(name) %>%
+    arrange(desc(area)) %>%
+    slice(1) %>%
+    ungroup() %>%
+    select(-area) %>%
+    select(image_name, fragment_name, name:isLocked, geometry)
+
+  lymphocyte_outlines_geom <- lymphocytes %>% select(name, geometry)
+  lymphocyte_centroids <- st_centroid(lymphocytes)
+
+  # Helper to get outlines per region
+  map_and_label_lymphocytes <- function(region_geom, label) {
+    filter_objects_in_region(lymphocyte_centroids, region_geom) %>%
+      mutate(classification = paste(label, classification, sep = "_")) %>%
+      select(-tissue_index) %>%
+      st_drop_geometry() %>%
+      left_join(lymphocyte_outlines_geom)
+  }
+
+  villi_epithelium_outlines      <- map_and_label_lymphocytes(villi_epithelium_geom, "villi_epithelium")
+  villi_lamina_propria_outlines  <- map_and_label_lymphocytes(villi_lamina_propria_geom, "villi_lamina_propria")
+  crypts_epithelium_outlines     <- map_and_label_lymphocytes(crypts_epithelium_geom, "crypts_epithelium")
+  crypts_lamina_propria_outlines <- map_and_label_lymphocytes(crypts_lamina_propria_geom, "crypts_lamina_propria")
+
+  # Create centroid summary
+  mucosa_lymphocyte_centroids <- bind_rows(
+    villi_epithelium_outlines,
+    villi_lamina_propria_outlines,
+    crypts_epithelium_outlines,
+    crypts_lamina_propria_outlines
+  ) %>%
+    mutate(mucosa_name = mucosa$mucosa_name) %>%
+    select(image_name, fragment_name, mucosa_name, name:geometry)
+
+  # Unite outlines for export
+  lymphocyte_outlines_united <- bind_rows(
+    villi_epithelium_outlines,
+    villi_lamina_propria_outlines,
+    crypts_epithelium_outlines,
+    crypts_lamina_propria_outlines
+  ) %>%
+    group_by(image_name, fragment_name, classification, objectType, isLocked) %>%
+    summarise(geometry = st_union(geometry), .groups = "drop") %>%
+    mutate(mucosa_name = mucosa$mucosa_name, name = classification)
+
+  # Create final composite sf
+  mucosa_select <- mucosa %>%
+    mutate(name = paste("mucosa", orientation_class, artefact_class, "artefact", sep = "_"),
+           classification = "mucosa",
+           objectType = "annotation",
+           isLocked = TRUE) %>%
+    select(image_name, fragment_name, mucosa_name, name, classification, objectType, isLocked, geometry)
+
+  output_layers <- bind_rows(
+    mucosa_select,
+    union_layer("villi"),
+    union_layer("crypts"),
+    union_tissue(tissues_villi, "villi", "epithelium"),
+    union_tissue(tissues_villi, "villi", "lamina_propria"),
+    villi_lumen_united,
+    union_tissue(tissues_crypts, "crypts", "epithelium"),
+    union_tissue(tissues_crypts, "crypts", "lamina_propria"),
+    crypts_lumen_united,
+    lymphocyte_outlines_united
+  )
+
+  # Write outputs
+  st_write(output_layers, file.path(output_dir, paste0(muc, "_mapped_ai_output.geojson")), quiet = TRUE, delete_dsn = TRUE)
+  st_write(mucosa_lymphocyte_centroids, file.path(output_dir, paste0(muc, "_lymphocyte_centroids.geojson")), quiet = TRUE, delete_dsn = TRUE)
+}
+
+
+map_all_ai_outputs <- function(mucosa_names,
+                               included_mucosa_list,
+                               artefact_dir,
+                               combos_dir,
+                               output_dir) {
+  
+  for (muc in mucosa_names) {
+    try({
+      map_ai_output(
+        muc = muc,
+        included_mucosa_list = included_mucosa_list,
+        artefact_dir = artefact_dir,
+        combos_dir = combos_dir,
+        output_dir = output_dir
+      )
+    }, silent = FALSE)
+  }
+}
+
+```
+
+### Process combos for labl_2020_tuning
+
+#### Input
+- *subset_labl_2020_tuning.json* (fe_si_images/output/process/subset)
+metadata for images in subset
+- *<image_name>_<fragment_name>_<mucosa_name>_artefacts.geojson* (fe_si_models/artefact/output/artefact)
+mucosa regions classified by orientation and artefact
+- *
+
+####
+
+```{r, warning=FALSE, message=FALSE}
+
+subset <- fromJSON("~/Library/CloudStorage/Box-Box/Projects/fe_si_images/output/process_subset/subset_labl_2020_tuning.json")
+
+artefact_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/artefact/output/artefact/"
+combos_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/combos/output/combos/"
+
+included_mucosa_list <- fromJSON("~/Library/CloudStorage/Box-Box/Projects/fe_si_models/artefact/output/artefact/template_artefacts.json") %>%
+  rename(artefact_class = classification) %>%
+  filter(artefact_class == "adequate" | artefact_class == "marginal") %>%
+  distinct(name, .keep_all = TRUE)
+
+image_names <- included_mucosa_list$image_name %>%
+  unique()
+
+filtered_subset <- subset %>% filter(image_name %in% image_names) 
+
+image_paths <- filtered_subset$file_path
+
+writeLines(image_paths, "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/combos/output/mapped_ai_output/file_paths_labl_2020_tuning.txt")
+
+mucosa_names <- included_mucosa_list$name
+
+output_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/combos/output/mapped_ai_output/"
+
+map_all_ai_outputs(mucosa_names = mucosa_names,
+                   included_mucosa_list = included_mucosa_list,
+                   artefact_dir = artefact_dir,
+                   combos_dir = combos_dir,
+                   output_dir = output_dir)
+
+```
+
+
+
+```{r}
+
+for (muc in mucosa_names[1]){
+  
+  message("Processing mucosa ", muc)
+  
+  mucosa_list <- included_mucosa_list %>% filter(name == muc)
+  
+  image_fragment <- paste(mucosa_list$image_name, mucosa_list$fragment_name, sep = "_")
+  
+  mucosa_path <- paste0(artefact_dir, muc, "_", "si_artefact.geojson")
+  
+  mucosa <- st_read(mucosa_path, quiet = TRUE) %>% st_set_crs(0) %>%
+    rename(artefact_class = classification)
+  
+  mucosa_geom <- mucosa %>% select(name, geometry)
+  
+  layers_path <- paste0(combos_dir, image_fragment, "_layers.geojson")
+  
+  layers <- st_read(layers_path, quiet = TRUE) %>% st_set_crs(0) %>%
+    rename(layers_name = name) %>%
+    mutate(mucosa_name = mucosa$mucosa_name)
+  
+  layers_intersection <- st_intersection(layers, mucosa_geom)
+  
+  villi_united <- layers_intersection %>% 
+    filter(classification == "villi") %>%
+    group_by(image_name, fragment_name, mucosa_name, classification, objectType, isLocked) %>%
+    summarise(geometry = st_union(geometry), .groups = "drop") %>% 
+    mutate(name = paste(muc, classification, sep = "_"))
+  
+  villi_geom <- villi_united  %>%
+    select(name, geometry)
+  
+  crypts_united <- layers_intersection %>% 
+    filter(classification == "crypts") %>%
+    group_by(image_name, fragment_name, mucosa_name, classification, objectType, isLocked) %>%
+    summarise(geometry = st_union(geometry), .groups = "drop") %>% 
+    mutate(name = paste(muc, classification, sep = "_")) 
+  
+  crypts_geom <- crypts_united %>%
+    select(name, geometry)
+  
+  tissues_path <- paste0(combos_dir, image_fragment, "_tissues.geojson")
+  
+  tissues <- st_read(tissues_path, quiet = TRUE) %>% st_set_crs(0) %>%
+    rename(tissues_name = name) %>%
+    mutate(mucosa_name = mucosa$mucosa_name)
+  
+  tissues_villi <- st_intersection(tissues, villi_geom) %>%
+    filter_out_line_geometries() %>%
+    mutate(name = paste(name, classification, sep = "_"))
+  
+  tissues_crypts <- st_intersection(tissues, crypts_geom) %>%
+    filter_out_line_geometries() %>%
+    mutate(name = paste(name, classification, sep = "_"))
+  
+  villi_epithelium_united <- tissues_villi %>%
+    filter(classification == "epithelium") %>%
+    group_by(image_name, fragment_name, mucosa_name, name, classification, objectType, isLocked) %>%
+    summarise(geometry = st_union(geometry), .groups = "drop") %>%
+    mutate(classification = paste("villi", classification, sep = "_"))
+  
+  villi_epithelium_geom <- villi_epithelium_united %>% select(name, geometry)
+  
+  villi_lamina_propria_united <- tissues_villi %>%
+    filter(classification == "lamina_propria") %>%
+    group_by(image_name, fragment_name, mucosa_name, name, classification, objectType, isLocked) %>%
+    summarise(geometry = st_union(geometry), .groups = "drop") %>%
+    mutate(classification = paste("villi", classification, sep = "_"))
+  
+  villi_lamina_propria_geom <- villi_lamina_propria_united %>% select(name, geometry)
+  
+  villi_lumen_united <- tissues_villi %>%
+    filter(classification == "lumen") %>%
+    group_by(image_name, fragment_name, mucosa_name, name, classification, objectType, isLocked) %>%
+    summarise(geometry = st_union(geometry), .groups = "drop") %>%
+    mutate(classification = paste("villi", classification, sep = "_"))
+  
+  crypts_epithelium_united <- tissues_crypts %>%
+    filter(classification == "epithelium") %>%
+    group_by(image_name, fragment_name, mucosa_name, name, classification, objectType, isLocked) %>%
+    summarise(geometry = st_union(geometry), .groups = "drop") %>%
+    mutate(classification = paste("crypts", classification, sep = "_"))
+  
+  crypts_epithelium_geom <- crypts_epithelium_united %>% select(name, geometry)
+  
+  crypts_lamina_propria_united <- tissues_crypts %>%
+    filter(classification == "lamina_propria") %>%
+    group_by(image_name, fragment_name, mucosa_name, name, classification, objectType, isLocked) %>%
+    summarise(geometry = st_union(geometry), .groups = "drop") %>%
+    mutate(classification = paste("crypts", classification, sep = "_"))
+  
+  crypts_lamina_propria_geom <- crypts_lamina_propria_united %>% select(name, geometry)
+  
+  crypts_lumen_united <- tissues_crypts %>%
+    filter(classification == "lumen") %>%
+    group_by(image_name, fragment_name, mucosa_name, name, classification, objectType, isLocked) %>%
+    summarise(geometry = st_union(geometry), .groups = "drop") %>%
+    mutate(classification = paste("crypts", classification, sep = "_"))
+  
+  lymphocytes_path <- paste0(combos_dir, image_fragment, "_lymphocytes.geojson")
+  
+  lymphocytes <- st_read(lymphocytes_path, quiet = TRUE) %>% 
+    st_set_crs(0) %>%
+    mutate(area = st_area(geometry)) %>% #this part removes any duplicate lymphocytes (not present in all)
+      group_by(name) %>%
+      arrange(desc(area)) %>%
+      slice(1) %>%
+      ungroup() %>%
+      select(-area) %>%
+    select(image_name, fragment_name, name:isLocked, geometry)
+  
+  lymphocyte_outlines_geom <- lymphocytes %>% select(name, geometry)
+  
+  image_lymphocytes <- nrow(lymphocytes)
+  
+  lymphocyte_centroids <- st_centroid(lymphocytes) 
+  
+  villi_epithelium_lymphocytes <- filter_objects_in_region(lymphocyte_centroids, villi_epithelium_geom) %>%
+    mutate(classification = paste("villi_epithelium", classification, sep = "_")) %>%
+    select(- tissue_index)
+  
+  villi_epithelium_lymphocytes_outlines <- villi_epithelium_lymphocytes %>%
+    st_drop_geometry() %>%
+    left_join(lymphocyte_outlines_geom)
+  
+  villi_lamina_propria_lymphocytes <- filter_objects_in_region(lymphocyte_centroids, villi_lamina_propria_geom) %>%
+    mutate(classification = paste("villi_lamina_propria", classification, sep = "_")) %>%
+    select(- tissue_index)
+  
+  villi_lamina_propria_lymphocytes_outlines <- villi_lamina_propria_lymphocytes %>%
+    st_drop_geometry() %>%
+    left_join(lymphocyte_outlines_geom)
+  
+  crypts_epithelium_lymphocytes <- filter_objects_in_region(lymphocyte_centroids, crypts_epithelium_geom) %>%
+    mutate(classification = paste("crypts_epithelium", classification, sep = "_")) %>%
+    select(- tissue_index)
+  
+  crypts_epithelium_lymphocytes_outlines <- crypts_epithelium_lymphocytes %>%
+    st_drop_geometry() %>%
+    left_join(lymphocyte_outlines_geom)
+  
+  crypts_lamina_propria_lymphocytes <- filter_objects_in_region(lymphocyte_centroids, crypts_lamina_propria_geom) %>%
+    mutate(classification = paste("crypts_lamina_propria", classification, sep = "_")) %>%
+    select(- tissue_index)
+  
+  crypts_lamina_propria_lymphocytes_outlines <- crypts_lamina_propria_lymphocytes %>%
+    st_drop_geometry() %>%
+    left_join(lymphocyte_outlines_geom)
+  
+  
+  mucosa_lymphocyte_centroids <- bind_rows(villi_epithelium_lymphocytes,
+                                           villi_lamina_propria_lymphocytes,
+                                           crypts_epithelium_lymphocytes,
+                                           crypts_lamina_propria_lymphocytes) %>%
+    mutate(mucosa_name = mucosa$mucosa_name) %>%
+    select(image_name, fragment_name, mucosa_name, name:geometry)
+  
+  lymphocyte_outlines_united <- bind_rows(villi_epithelium_lymphocytes_outlines,
+                                           villi_lamina_propria_lymphocytes_outlines,
+                                           crypts_epithelium_lymphocytes_outlines,
+                                           crypts_lamina_propria_lymphocytes_outlines) %>%
+    group_by(image_name, fragment_name, classification, objectType, isLocked) %>%
+    summarise(geometry = st_union(geometry), .groups = "drop") %>%
+    mutate(mucosa_name = mucosa$mucosa_name,
+           name = classification)
+  
+  mucosa_select <- mucosa %>% 
+    mutate(name = paste("mucosa", orientation_class, artefact_class, "artefact", sep = "_"),
+           classification = "mucosa",
+           objectType = "annotation",
+           isLocked = TRUE) %>%
+    select(image_name, fragment_name, mucosa_name, name, classification, objectType, isLocked, geometry)
+  
+  mucosa_layers_tissues_and_lymphocytes <- bind_rows(mucosa_select,
+                                                     villi_united, 
+                                                     crypts_united, 
+                                                     villi_epithelium_united, 
+                                                     villi_lamina_propria_united,
+                                                     villi_lumen_united,
+                                                     crypts_epithelium_united, 
+                                                     crypts_lamina_propria_united,
+                                                     crypts_lumen_united,
+                                                     lymphocyte_outlines_united) 
+  
+  st_write(mucosa_layers_tissues_and_lymphocytes, paste0(output_dir, muc, "_mapped_ai_output.geojson"), quiet = TRUE, delete_dsn = TRUE)
+  
+  st_write(mucosa_lymphocyte_centroids, paste0(output_dir, muc, "_lymphocyte_centroids.geojson"), quiet = TRUE, delete_dsn = TRUE)
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+}
+```
