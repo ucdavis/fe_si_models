@@ -9,16 +9,24 @@ Semantic segmentation (pixel classification)
 ## Model architecture type & platform
 CNN, Aiforia create
 
+## Combination with other models in aiforia
+This model was chained with the models "compartments" and "lymphocytes" within
+Aiforia with layers as the parent model, "compartments" only run in recognized layers
+and "lymphocytes" only run in recognized compartments. This strategy can be cost 
+efficient (although the cost is not completely explainable)
+
+SOP for combining models in aiforia:
+https://docs.google.com/presentation/d/1TfTqYD7IXBNtEB0yTfHjLSWQN352mR_C/edit?usp=sharing&ouid=114290326180405247455&rtpof=true&sd=true
+
+## Tracking of version and combinations
+https://docs.google.com/spreadsheets/d/1Bg5ZT4h1TjjKgKP76iZ03OzNSspau0jlSxPWKsOVVXw/edit?usp=sharing
+
 ## Active version
-fe_si_layers_pv6_mv11
+fe_si_layers_pv6_mv11 in combinations fe_si_combos_pv2_mv2
 
 ## Development
 This model was developed by KLJ in Aiforia and assessed by JMW
 
-This and previous project and model versions for small intestinal layer segmentation
-are documented here (sheet: fe_si_layers): 
-
-https://docs.google.com/spreadsheets/d/1Bg5ZT4h1TjjKgKP76iZ03OzNSspau0jlSxPWKsOVVXw/edit?usp=sharing
 
 ## Tuning
 - KLJ used a small set (n 21) for tuning. Most are from the labl_2020_tuning set but

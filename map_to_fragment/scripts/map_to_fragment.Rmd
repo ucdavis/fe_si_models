@@ -25,7 +25,7 @@ fragment coordinates
 - *<image_name>_<fragment_name>_fragments.geojson*
 
 ### Issues /Deviations / comments
-- this used to be in an fe_si_models folder "combos" moved to new folder "merged_model_output" to better reflect functionality in pipeline
+- this used to be in an fe_si_models folder "combos" moved to new folder "map_to_fragment" to better reflect functionality in pipeline
 - changed the name of epithelium/lamina propria models (and judits_work_keller_lab) from _tissue_ to _compartments_ and added model_version to output files to keep track of origin. Will have to rename / reprocess already processed files.
 -errors when processing the larger images on PC (lenovo) but not on macbook
 
@@ -184,10 +184,35 @@ process_image_fragments <- function(image_names, model_version, ia_results_dir, 
 ```
 
 
-### Process grading_sample (for fe_si_papers/lymphocyte_distribution)
+### Process batch_1 (for fe_si_papers/lymphocyte_distribution)
 - fragments_included_subset
 
+```{r, message=FALSE, warning=FALSE}
 
+subset_name <- "batch_1"
+model_version <- "fe_si_combos_pv2_mv2"
+
+included_fragments <- fromJSON(paste0("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragments/output/process_reviewed_fragments/fragments_included_", subset_name, ".json")) %>%
+  mutate(image_fragment_name = paste(image_name, fragment_name, sep = "_"))
+
+image_names <- unique(included_fragments$image_name)
+image_fragment_names <- unique(included_fragments$image_fragment_name)
+
+model_version <- "fe_si_combos_pv2_mv2"
+
+ia_results_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_platforms/aiforia/output/ia_results/"
+
+fragments_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragments/output/fragments/"
+
+output_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/map_to_fragment/output/map_to_fragment/"
+
+
+process_image_fragments(image_names, model_version, ia_results_dir, fragments_dir, output_dir, included_fragments)
+```
+
+
+### Process grading_sample (batch_1) (for fe_si_papers/lymphocyte_distribution)
+- fragments_included_subset
 
 ```{r, message=FALSE, warning=FALSE}
 
@@ -236,6 +261,34 @@ output_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/combos/output/
 
 process_image_fragments(image_names, model_version, combos_dir, fragments_dir, output_dir)
 ```
+
+
+
+
+### REDO THIS AS YOU PROCESS BATCHES - OBS MAY WANT TO KEEP OLD PROCESS SINCE USED FOR VALIDATIING COMPONENT MODELS    
+### Process image fragment for labl_2020_tuning model fe_si_combos_pv2_mv2
+Processes image fragments for labl_2020 tuning image if the results for the corresponding model has been downloaded
+
+#### Issues/Deviations
+Got errors when processing the larger images on PC (lenovo) but not on macbook
+
+```{r, message=FALSE, warning=FALSE}
+subset_labl_2020_tuning <- fromJSON(paste0(to_box,"judits_work_keller_lab/fe_si_images/output/process_subset/subset_labl_2020_tuning.json"))
+
+image_names <- subset_labl_2020_tuning$image_name
+
+model_version <- "fe_si_combos_pv2_mv2"
+
+combos_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/combos/output/aiforia_ia_results/")
+
+fragments_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/fragments/output/fragments/")
+
+output_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/combos/output/combos_duplicate/")
+
+
+process_image_fragments(image_names, model_version, combos_dir, fragments_dir, output_dir)
+```
+
 
 
 ### Process image fragment for labl_2020_training model fe_si_combos_pv2_mv2
