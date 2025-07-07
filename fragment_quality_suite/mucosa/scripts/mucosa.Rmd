@@ -449,6 +449,7 @@ process_mucosa <- function(model_version,
 #### Process grading_sample (batch_0) (fe_si_papers/lymphocyte_distribution/)
 The min area size was set to 100 for this but filtered afterwards to 500
 
+
 ```{r, message=FALSE, warning=FALSE}
 
 subset_name <- "grading_sample"
@@ -504,6 +505,20 @@ write_json(mucosa_metadata_subset, "~/Library/CloudStorage/Box-Box/judits_work_k
 
 
 #### Process batch_1 (fe_si_papers/lymphocyte_distribution/)
+
+#### Issues
+- For "21B1581-01" mucosa fragment "09" - investigate and harvest checkpoint before rerunning
+
+Error in `stopifnot()`:
+ℹ In argument: `circumference_px = st_length(st_boundary(geometry))`.
+Caused by error in `scan()`:
+! scan() expected 'a real', got 'IllegalArgumentException:'
+Run `rlang::last_trace()` to see where the error occurred.
+Error in `stopifnot()`:
+ℹ In argument: `circumference_px = st_length(st_boundary(geometry))`.
+Caused by error:
+! IllegalArgumentException: Operation not supported by GeometryCollection
+Run `rlang::last_trace()` to see where the error occurred.
 
 ```{r, message=FALSE, warning=FALSE}
 
