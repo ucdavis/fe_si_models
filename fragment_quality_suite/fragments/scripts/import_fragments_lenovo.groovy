@@ -3,7 +3,7 @@ import java.nio.file.Paths
 
 def homeDir  = System.getProperty('user.home')
 def inputDir = Paths.get(homeDir, 'Box', 'judits_work_keller_lab',
-                         'fe_si_models', 'fragments', 'output', 'fragments')
+                         'fe_si_models', 'fragment_quality_suite', 'fragments', 'output', 'fragments')
 
 def className  = 'fragments'
 def entry      = getProjectEntry()
