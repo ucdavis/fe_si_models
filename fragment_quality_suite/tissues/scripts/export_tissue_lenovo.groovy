@@ -7,7 +7,7 @@ import java.nio.file.Paths      // <- we keep Paths, drop Path
 def homeDir   = System.getProperty('user.home')
 def outputDir = Paths.get(
         homeDir,
-        'Box', 'judits_work_keller_lab', 'fe_si_models', 'tissues',
+        'Box', 'judits_work_keller_lab', 'fe_si_models', 'fragment_quality_suite','tissues',
         'output', 'export_tissue'
 )
 
