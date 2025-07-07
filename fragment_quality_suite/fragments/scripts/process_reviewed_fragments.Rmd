@@ -103,3 +103,16 @@ fragments_reviewed <- read_xlsx(paste0("~/Library/CloudStorage/Box-Box/judits_wo
 processed <- process_reviewed_fragments(subset_name, output_dir, fragments_reviewed)
 
 ```
+
+### Process batch_3 (for fe_si_papers/lymphocyte_distribution ...)
+
+```{r}
+subset_name <- "batch_3"
+
+output_dir <- "C:/Users/15303/Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/process_reviewed_fragments/"
+
+fragments_reviewed <- read_xlsx(paste0("C:/Users/15303/Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/fragments_reviewed/", subset_name, "_fragments_reviewed.xlsx"))
+
+processed <- process_reviewed_fragments(subset_name, output_dir, fragments_reviewed)
+
+```
