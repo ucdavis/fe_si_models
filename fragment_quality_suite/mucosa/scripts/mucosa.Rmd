@@ -57,13 +57,33 @@ Sys.setenv(OGR_GEOJSON_MAX_OBJ_SIZE = "0") #Allows processing of large files
 
 to_box <- "~/Library/CloudStorage/Box-Box/"
 
+read_sf_retry <- function(path, retries = 3, wait = 5) {
+  attempt <- 1
+  while (attempt <= retries) {
+    msg <- sprintf("  ↳ trying to open %s (attempt %d/%d)…", basename(path),
+                   attempt, retries)
+    cat(msg, "\n")
+
+    x <- tryCatch(
+      st_read(path, quiet = TRUE) |> st_set_crs(0),
+      error = function(e) NULL            # swallow the error, return NULL
+    )
+
+    if (!is.null(x)) return(x)            # success → return the object
+
+    Sys.sleep(wait)                       # wait a bit and try again
+    attempt <- attempt + 1
+  }
+  stop("failed")                          # let caller know it never worked
+}
+
 process_mucosa <- function(model_version,
                            subset, 
                            fragment_metadata, 
                            fragment_dir, 
                            map_to_fragment_dir, 
                            mucosa_dir, 
-                           min_area_1000_um2 = 100,
+                           min_area_1000_um2 = 500,
                            high_conf_limit = 100,
                            orientation_adequate_th = 30,
                            orientation_marginal_th = 10,
@@ -99,7 +119,7 @@ process_mucosa <- function(model_version,
     
     #Read in and process layers 
     layer_path <- paste0(map_to_fragment_dir, image_fragment, "_", model_version, "_layers.geojson")
-    layers <- st_read(layer_path, quiet = TRUE) %>% st_set_crs(0)
+    layers <- read_sf_retry(layer_path) %>% st_set_crs(0)
     
     #Handle cases with no layers (no recognized villi or crypts of any confidence)
     
@@ -151,18 +171,6 @@ process_mucosa <- function(model_version,
              name = paste(img, frag, mucosa_name, sep = "_")) %>%
       select(image_name, fragment_name, mucosa_name, name, classification, area_1000_um2) %>%
       arrange(name)
-  
-    #Unite each class of layers to calculate percentages of each and intersection
-    
-    #Only high confidence layers are used to decide if small intestine or not
-    #layers_high_conf_united <- layers %>%
-     # mutate(confidence_percentage = round(confidence_percentage)) %>%
-      #filter(confidence_percentage == high_conf_limit) %>%
-      #group_by(image_name, fragment_name, objectType, isLocked, classification) %>%
-      #summarise(geometry = st_union(geometry), .groups = "drop")
-    
-    #villi_high_conf <- layers_high_conf_united %>% filter(classification == "villi")
-    #crypts_high_conf <- layers_high_conf_united %>% filter(classification == "crypts")
     
     #Layers of all confidence levels are used for calculating percentages used for orientation
     layers_all_conf_united <- layers %>%
@@ -174,7 +182,7 @@ process_mucosa <- function(model_version,
     
     compartments_path <- paste0(map_to_fragment_dir, image_fragment, "_", model_version, "_compartments.geojson")
     
-    compartments <- st_read(compartments_path, quiet = TRUE) %>% st_set_crs(0)
+    compartments <- read_sf_retry(compartments_path) %>% st_set_crs(0)
     
     #Process by individual mucosa polygons within fragments
     
@@ -182,19 +190,7 @@ process_mucosa <- function(model_version,
        
        mucosa_part <- mucosa_draft %>% filter(mucosa_name == muc_part)
        mucosa_geom <- mucosa_part %>% select(name, geometry)
-       
-       #villi_high <- st_intersection(villi_high_conf, mucosa_geom) %>%
-        #mutate(area_px2 = st_area(geometry),
-         #      area_um2 = area_px2 * pixel_area_um2,
-          #     area_1000_um2 = area_um2 / 1000,
-           #    circumference_px = st_length(st_boundary(geometry)))
-       
-        #crypts_high <- st_intersection(crypts_high_conf, mucosa_geom) %>%
-        #mutate(area_px2 = st_area(geometry),
-         #      area_um2 = area_px2 * pixel_area_um2,
-          #     area_1000_um2 = area_um2 / 1000,
-           #    circumference_px = st_length(st_boundary(geometry)))
-        
+  
         villi_all_conf <- st_intersection(villi, mucosa_geom) %>%
         mutate(area_px2 = st_area(geometry),
                area_um2 = area_px2 * pixel_area_um2,
@@ -450,8 +446,8 @@ process_mucosa <- function(model_version,
 ```
 
 
-#### Process grading_sample (fe_si_papers/lymphocyte_distribution/)
-
+#### Process grading_sample (batch_0) (fe_si_papers/lymphocyte_distribution/)
+The min area size was set to 100 for this but filtered afterwards to 500
 
 ```{r, message=FALSE, warning=FALSE}
 
@@ -473,9 +469,9 @@ fragment_metadata <- fromJSON(paste0("~/Library/CloudStorage/Box-Box/judits_work
 
 fragment_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragments/output/fragments/"
 
-map_to_fragment_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/combos/output/map_to_fragment/"
+map_to_fragment_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/merge_model_output/map_to_fragment/output/map_to_fragment/"
 
-mucosa_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/mucosa/output/mucosa/"
+mucosa_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/output/mucosa/"
 
 
 
@@ -507,7 +503,54 @@ write_json(mucosa_metadata_subset, "~/Library/CloudStorage/Box-Box/judits_work_k
 
 
 
+#### Process batch_1 (fe_si_papers/lymphocyte_distribution/)
 
+```{r, message=FALSE, warning=FALSE}
+
+subset_name <- "batch_1"
+model_version <- "fe_si_combos_pv2_mv2"
+
+included_fragments <- fromJSON(paste0("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/process_reviewed_fragments/fragments_included_", subset_name, ".json")) %>%
+  mutate(image_fragment_name = paste(image_name, fragment_name, sep = "_"))
+
+image_fragment_names <- unique(included_fragments$image_fragment_name)
+image_names <- unique(included_fragments$image_name)
+
+subset <- fromJSON(paste0("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_images/output/process_subset/subset_", subset_name, ".json")) %>%
+  filter(image_name %in% included_fragments$image_name)
+
+fragment_metadata <- fromJSON(paste0("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/fragments/fragment_metadata_", subset_name,".json")) %>%
+  mutate(image_fragment_name = paste(image_name, fragment_name, sep = "_")) %>%
+  filter(image_fragment_name %in% included_fragments$image_fragment_name)
+
+fragment_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/fragments/"
+
+map_to_fragment_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/merge_model_output/map_to_fragment/output/map_to_fragment/"
+
+mucosa_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/output/mucosa/"
+
+#Check that all images have downloaded and processed layer files
+map_to_fragment_files <- list.files(map_to_fragment_dir)
+matching_image_fragment_names <- image_fragment_names[
+  sapply(image_fragment_names, function(name) any(startsWith(map_to_fragment_files, name)))
+  ]
+
+non_matching_image_fragment_names <- image_fragment_names[
+  !sapply(image_fragment_names, function(name) any(startsWith(map_to_fragment_files, name)))
+]
+
+min_area_1000_um2 <- 500
+high_conf_limit <- 100
+orientation_adequate_th <- 30
+orientation_marginal_th <-  10
+artefact_adequate_th <- 95
+artefact_marginal_th <- 70
+
+mucosa_metadata_subset <- process_mucosa(model_version, subset, fragment_metadata, fragment_dir, map_to_fragment_dir, mucosa_dir)
+
+
+write_json(mucosa_metadata_subset, paste0(mucosa_dir, "mucosa_metadata_", subset_name, ".json", pretty = TRUE))
+```
 
 
 #### Process subset_labl_2020_tuning
