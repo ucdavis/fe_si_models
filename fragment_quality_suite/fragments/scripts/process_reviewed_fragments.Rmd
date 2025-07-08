@@ -105,9 +105,24 @@ processed <- process_reviewed_fragments(subset_name, output_dir, fragments_revie
 ```
 
 ### Process batch_3 (for fe_si_papers/lymphocyte_distribution ...)
-
+#### Issues/Deviations
+Corrected a dupluicate slide after downloading ia results
 ```{r}
 subset_name <- "batch_3"
+
+output_dir <- "C:/Users/15303/Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/process_reviewed_fragments/"
+
+fragments_reviewed <- read_xlsx(paste0("C:/Users/15303/Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/fragments_reviewed/", subset_name, "_fragments_reviewed.xlsx"))
+
+processed <- process_reviewed_fragments(subset_name, output_dir, fragments_reviewed)
+
+```
+
+### Process batch_4 (for fe_si_papers/lymphocyte_distribution ...)
+#### Issues/Deviations
+
+```{r}
+subset_name <- "batch_4"
 
 output_dir <- "C:/Users/15303/Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/process_reviewed_fragments/"
 
