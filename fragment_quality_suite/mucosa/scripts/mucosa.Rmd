@@ -55,7 +55,8 @@ library(writexl)
 library(readxl)
 Sys.setenv(OGR_GEOJSON_MAX_OBJ_SIZE = "0") #Allows processing of large files
 
-to_box <- "~/Library/CloudStorage/Box-Box/"
+#to_box <- "~/Library/CloudStorage/Box-Box/"
+to_box <- "C:/Users/15303/Box/"
 
 read_sf_retry <- function(path, retries = 3, wait = 5) {
   attempt <- 1
@@ -105,7 +106,7 @@ process_mucosa <- function(model_version,
   if (file.exists(checkpoint_file)) readRDS(checkpoint_file) else NULL
   
   for (image_fragment in image_fragment_names){
-    
+  
     #get image metadata
     image_fragment_fragment_metadata <- fragment_metadata %>% 
       filter(image_fragment_name == image_fragment)
@@ -190,18 +191,26 @@ process_mucosa <- function(model_version,
        
        mucosa_part <- mucosa_draft %>% filter(mucosa_name == muc_part)
        mucosa_geom <- mucosa_part %>% select(name, geometry)
-  
-        villi_all_conf <- st_intersection(villi, mucosa_geom) %>%
-        mutate(area_px2 = st_area(geometry),
-               area_um2 = area_px2 * pixel_area_um2,
-               area_1000_um2 = area_um2 / 1000,
-               circumference_px = st_length(st_boundary(geometry)))
+       
+       villi_all_conf <- st_intersection(villi, mucosa_geom) %>%
+          st_collection_extract("POLYGON") %>% 
+         group_by(classification, name) %>%       
+         summarize(geometry = st_union(geometry), .groups = "drop") %>%
+         st_cast("MULTIPOLYGON") %>%
+         mutate(area_px2 = st_area(geometry),
+                area_um2 = area_px2 * pixel_area_um2,
+                area_1000_um2 = area_um2 / 1000,
+                circumference_px = st_length(st_boundary(geometry)))
         
-        crypts_all_conf <- st_intersection(crypts, mucosa_geom) %>%
-        mutate(area_px2 = st_area(geometry),
-               area_um2 = area_px2 * pixel_area_um2,
-               area_1000_um2 = area_um2 / 1000,
-               circumference_px = st_length(st_boundary(geometry)))
+       crypts_all_conf <- st_intersection(crypts, mucosa_geom) %>%
+         st_collection_extract("POLYGON") %>% 
+         group_by(classification, name) %>%       
+         summarize(geometry = st_union(geometry), .groups = "drop") %>%
+         st_cast("MULTIPOLYGON") %>%
+         mutate(area_px2 = st_area(geometry),
+                area_um2 = area_px2 * pixel_area_um2,
+                area_1000_um2 = area_um2 / 1000,
+                circumference_px = st_length(st_boundary(geometry)))
         
         #Classify orientation
         if (nrow(villi_all_conf) == 0 && nrow(crypts_all_conf) == 0) {
@@ -286,12 +295,20 @@ process_mucosa <- function(model_version,
         villi_geom <- villi_all_conf%>% select(name, geometry)
         crypts_geom <- crypts_all_conf %>% select(name, geometry)
         
-         quality_villi <- st_intersection(compartments_united, villi_geom) %>%
+        quality_villi <- st_intersection(compartments_united, villi_geom) %>%
+           st_collection_extract("POLYGON") %>% 
+          group_by(classification, name) %>%
+           summarize(geometry = st_union(geometry), .groups = "drop") %>%
+           st_cast("MULTIPOLYGON") %>%
            mutate(area_px2 = st_area(geometry),
                   area_um2 = area_px2 * pixel_area_um2,
                   area_1000_um2 = area_um2 / 1000)
-         
-         quality_crypts <- st_intersection(compartments_united, crypts_geom) %>%
+        
+        quality_crypts <- st_intersection(compartments_united, crypts_geom) %>%
+           st_collection_extract("POLYGON") %>% 
+          group_by(classification, name) %>%
+           summarize(geometry = st_union(geometry), .groups = "drop") %>%
+           st_cast("MULTIPOLYGON") %>% 
            mutate(area_px2 = st_area(geometry),
                   area_um2 = area_px2 * pixel_area_um2,
                   area_1000_um2 = area_um2 / 1000)
@@ -440,10 +457,15 @@ process_mucosa <- function(model_version,
      }
   }
   
-   return(subset_mucosa_metadata)
   
+  return(subset_mucosa_metadata)
 }
+
+
+
 ```
+
+
 
 
 #### Process grading_sample (batch_0) (fe_si_papers/lymphocyte_distribution/)
@@ -507,42 +529,35 @@ write_json(mucosa_metadata_subset, "~/Library/CloudStorage/Box-Box/judits_work_k
 #### Process batch_1 (fe_si_papers/lymphocyte_distribution/)
 
 #### Issues
-- For "21B1581-01" mucosa fragment "09" - investigate and harvest checkpoint before rerunning
+- Broke at image_fragment 886. Recovered 1-885 from checkpoint, fixed bug and reran just 886 and onwards.
 
-Error in `stopifnot()`:
-ℹ In argument: `circumference_px = st_length(st_boundary(geometry))`.
-Caused by error in `scan()`:
-! scan() expected 'a real', got 'IllegalArgumentException:'
-Run `rlang::last_trace()` to see where the error occurred.
-Error in `stopifnot()`:
-ℹ In argument: `circumference_px = st_length(st_boundary(geometry))`.
-Caused by error:
-! IllegalArgumentException: Operation not supported by GeometryCollection
-Run `rlang::last_trace()` to see where the error occurred.
+Error processing fragment: 23B1581_T1_he_2025-02-04_02 
+Error: In argument: `pct_shared_border = (shared_len/circumference_px) * 100`. 
+Error in writeLines(paste(Sys.time(), image_fragment, e$message), file = file.path(mucosa_dir,  : 
+  unused arguments (file = file.path(mucosa_dir, "error_log.txt"), append = TRUE)
+Error during wrapup: not that many frames on the stack
+Error: no more error handlers available (recursive errors?); invoking 'abort' restart
 
 ```{r, message=FALSE, warning=FALSE}
+#subset saved from checkpoint before error
+subset_ran <- fromJSON("C:/Users/15303/Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/output/mucosa/mucosa_metadata_batch_1_1_885.json") %>%
+  mutate(image_fragment_name = paste(image_name, fragment_name, sep = "_"))
+
 
 subset_name <- "batch_1"
 model_version <- "fe_si_combos_pv2_mv2"
 
-included_fragments <- fromJSON(paste0("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/process_reviewed_fragments/fragments_included_", subset_name, ".json")) %>%
+fragment_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/fragments/")
+
+map_to_fragment_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/merge_model_output/map_to_fragment/output/map_to_fragment/")
+
+mucosa_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/output/mucosa/")
+
+included_fragments <- fromJSON(paste0(to_box,"judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/process_reviewed_fragments/fragments_included_", subset_name, ".json")) %>%
   mutate(image_fragment_name = paste(image_name, fragment_name, sep = "_"))
 
 image_fragment_names <- unique(included_fragments$image_fragment_name)
 image_names <- unique(included_fragments$image_name)
-
-subset <- fromJSON(paste0("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_images/output/process_subset/subset_", subset_name, ".json")) %>%
-  filter(image_name %in% included_fragments$image_name)
-
-fragment_metadata <- fromJSON(paste0("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/fragments/fragment_metadata_", subset_name,".json")) %>%
-  mutate(image_fragment_name = paste(image_name, fragment_name, sep = "_")) %>%
-  filter(image_fragment_name %in% included_fragments$image_fragment_name)
-
-fragment_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/fragments/"
-
-map_to_fragment_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/merge_model_output/map_to_fragment/output/map_to_fragment/"
-
-mucosa_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/output/mucosa/"
 
 #Check that all images have downloaded and processed layer files
 map_to_fragment_files <- list.files(map_to_fragment_dir)
@@ -554,6 +569,15 @@ non_matching_image_fragment_names <- image_fragment_names[
   !sapply(image_fragment_names, function(name) any(startsWith(map_to_fragment_files, name)))
 ]
 
+subset <- fromJSON(paste0(to_box, "judits_work_keller_lab/fe_si_images/output/process_subset/subset_", subset_name, ".json")) %>%
+  filter(image_name %in% included_fragments$image_name)
+
+fragment_metadata <- fromJSON(paste0(to_box, "judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/fragments/fragment_metadata_", subset_name,".json")) %>%
+  mutate(image_fragment_name = paste(image_name, fragment_name, sep = "_")) %>%
+  filter(image_fragment_name %in% included_fragments$image_fragment_name) %>%
+  filter(!(image_fragment_name %in% subset_ran$image_fragment_name))
+  
+
 min_area_1000_um2 <- 500
 high_conf_limit <- 100
 orientation_adequate_th <- 30
@@ -561,10 +585,18 @@ orientation_marginal_th <-  10
 artefact_adequate_th <- 95
 artefact_marginal_th <- 70
 
+
 mucosa_metadata_subset <- process_mucosa(model_version, subset, fragment_metadata, fragment_dir, map_to_fragment_dir, mucosa_dir)
 
+write_json(mucosa_metadata_subset, paste0(mucosa_dir, "mucosa_metadata_", subset_name, ".json"), pretty = TRUE)
+```
 
-write_json(mucosa_metadata_subset, paste0(mucosa_dir, "mucosa_metadata_", subset_name, ".json", pretty = TRUE))
+
+```{r}
+
+
+
+
 ```
 
 
