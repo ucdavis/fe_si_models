@@ -529,14 +529,7 @@ write_json(mucosa_metadata_subset, "~/Library/CloudStorage/Box-Box/judits_work_k
 #### Process batch_1 (fe_si_papers/lymphocyte_distribution/)
 
 #### Issues
-- Broke at image_fragment 886. Recovered 1-885 from checkpoint, fixed bug and reran just 886 and onwards.
-
-Error processing fragment: 23B1581_T1_he_2025-02-04_02 
-Error: In argument: `pct_shared_border = (shared_len/circumference_px) * 100`. 
-Error in writeLines(paste(Sys.time(), image_fragment, e$message), file = file.path(mucosa_dir,  : 
-  unused arguments (file = file.path(mucosa_dir, "error_log.txt"), append = TRUE)
-Error during wrapup: not that many frames on the stack
-Error: no more error handlers available (recursive errors?); invoking 'abort' restart
+- Broke at image_fragment 886. Recovered 1-885 from checkpoint, fixed bug and reran just 886 and onwards, then combined with rest for subset
 
 ```{r, message=FALSE, warning=FALSE}
 #subset saved from checkpoint before error
@@ -588,16 +581,12 @@ artefact_marginal_th <- 70
 
 mucosa_metadata_subset <- process_mucosa(model_version, subset, fragment_metadata, fragment_dir, map_to_fragment_dir, mucosa_dir)
 
-write_json(mucosa_metadata_subset, paste0(mucosa_dir, "mucosa_metadata_", subset_name, ".json"), pretty = TRUE)
+#mucosa_metadata_combined <- bind_rows(subset_ran, mucosa_metadata_subset) 
+
+write_json(mucosa_metadata_combined, "C:/Users/15303/Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/output/mucosa/mucosa_metadata_batch_1.json", pretty = TRUE)
 ```
 
 
-```{r}
-
-
-
-
-```
 
 
 #### Process subset_labl_2020_tuning

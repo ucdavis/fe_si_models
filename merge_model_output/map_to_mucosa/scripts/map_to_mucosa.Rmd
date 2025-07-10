@@ -21,12 +21,21 @@ library(tidyverse)
 library(sf)
 Sys.setenv(OGR_GEOJSON_MAX_OBJ_SIZE = 0)
 
+#to_box <- "~/Library/CloudStorage/Box-Box/"
+to_box <- "C:/Users/15303/Box/"
+
 #When merging geometries sometimes linestrings are created - these slow down further mapping
 filter_out_line_geometries <- function(sf_df, geom_col = "geometry") {
   sf_df %>%
     filter(
       !st_geometry_type(.data[[geom_col]]) %in% c("LINESTRING", "MULTILINESTRING", "GEOMETRYCOLLECTION")
     )
+}
+
+clean_to_multipolygons <- function(x) {
+  x %>% 
+    st_collection_extract("POLYGON") %>%          # keep only polygons
+    st_cast("MULTIPOLYGON")                       # normalise type
 }
 
 #To filter a centroid to a region 
@@ -83,7 +92,8 @@ map_to_mucosa <- function(model_version, muc, mucosa_list, mucosa_dir, map_to_fr
     rename(layers_name = name) %>%
     mutate(mucosa_name = mucosa$mucosa_name)
 
-  layers_intersection <- st_intersection(layers, mucosa_geom)
+  layers_intersection <- st_intersection(layers, mucosa_geom) |>
+                       clean_to_multipolygons()
 
   # Union layers by classification
   union_layer <- function(class_label) {
@@ -108,12 +118,12 @@ map_to_mucosa <- function(model_version, muc, mucosa_list, mucosa_dir, map_to_fr
     rename(compartments_name = name) %>%
     mutate(mucosa_name = mucosa$mucosa_name)
 
-  compartments_villi <- st_intersection(compartments, villi_geom) %>%
-    filter_out_line_geometries() %>%
+  compartments_villi <- st_intersection(compartments, villi_geom) |>
+    clean_to_multipolygons()|>
     mutate(name = paste(name, classification, sep = "_"))
 
-  compartments_crypts <- st_intersection(compartments, crypts_geom) %>%
-    filter_out_line_geometries() %>%
+  compartments_crypts <- st_intersection(compartments, crypts_geom) |>
+    clean_to_multipolygons()|>
     mutate(name = paste(name, classification, sep = "_"))
 
   # Helper to unify tissues by classification
@@ -171,7 +181,7 @@ map_to_mucosa <- function(model_version, muc, mucosa_list, mucosa_dir, map_to_fr
   crypts_lamina_propria_outlines <- map_and_label_lymphocytes(crypts_lamina_propria_geom, "crypts_lamina_propria")
 
   # Create centroid summary
-  mucosa_lymphocyte_centroids <- bind_rows(
+  mucosa_lymphocytes <- bind_rows(
     villi_epithelium_outlines,
     villi_lamina_propria_outlines,
     crypts_epithelium_outlines,
@@ -214,7 +224,7 @@ map_to_mucosa <- function(model_version, muc, mucosa_list, mucosa_dir, map_to_fr
 
   # Write outputs
   st_write(output_layers, file.path(map_to_mucosa_dir, paste0(muc, "_", model_version,"_mapped_to_mucosa.geojson")), quiet = TRUE, delete_dsn = TRUE)
-  st_write(mucosa_lymphocyte_centroids, file.path(map_to_mucosa_dir, paste0(muc,"_", model_version, "_mapped_to_mucosa_lymphocytes.geojson")), quiet = TRUE, delete_dsn = TRUE)
+  st_write(mucosa_lymphocytes, file.path(map_to_mucosa_dir, paste0(muc,"_", model_version, "_mapped_to_mucosa_lymphocytes.geojson")), quiet = TRUE, delete_dsn = TRUE)
 }
 
 #wrapper
@@ -252,9 +262,34 @@ map_all_ai_outputs <- function(mucosa_names,
 ```
 
 
-REVISIT THIS AFTER RUNNING MUCOSA
+### Process batch 0 and 1
+
 ```{r}
+subset_grading <-  fromJSON("C:/Users/15303/Box/judits_work_keller_lab/fe_si_images/output/process_subset/subset_grading_sample.json")
+subset <- fromJSON("C:/Users/15303/Box/judits_work_keller_lab/fe_si_images/output/process_subset/subset_batch_1.json") 
+
+subset_name <- "batch_1"
+model_version <- "fe_si_combos_pv2_mv2"
+
+mucosa_list  <- fromJSON("C:/Users/15303/Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/output/mucosa/mucosa_metadata_batch_1.json") %>%
+  filter((orientation_class == "adequate" | orientation_class == "marginal") & (artefact_class == "adequate" | artefact_class == "marginal")) 
+
+mucosa_dir <- "C:/Users/15303/Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/output/mucosa/"
+
+map_to_fragment_dir <- "C:/Users/15303/Box/judits_work_keller_lab/fe_si_models/merge_model_output/map_to_fragment//output/map_to_fragment//"
+
+map_to_mucosa_dir <- "C:/Users/15303/Box/judits_work_keller_lab/fe_si_models/merge_model_output/map_to_mucosa//output/map_to_mucosa//"
+
+mucosa_names <- mucosa_list$name[557:681]
+
+map_all_ai_outputs(mucosa_names = mucosa_names,
+                   model_version = model_version,
+                   mucosa_list = mucosa_list,
+                   mucosa_dir = mucosa_dir,
+                   map_to_fragment_dir = map_to_fragment_dir,
+                   map_to_mucosa_dir = map_to_mucosa_dir)
 ```
+
 
 
 ### Process combos for labl_2020_tuning
