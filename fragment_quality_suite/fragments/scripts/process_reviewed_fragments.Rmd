@@ -147,7 +147,7 @@ processed <- process_reviewed_fragments(subset_name, output_dir, fragments_revie
 
 ```
 
-### Process batch_5 (for fe_si_papers/lymphocyte_distribution ...)
+### Process batch_6 (for fe_si_papers/lymphocyte_distribution ...)
 #### Issues/Deviations
 
 ```{r}
@@ -159,4 +159,32 @@ fragments_reviewed <- read_xlsx(paste0("~/Library/CloudStorage/Box-Box//judits_w
 
 processed <- process_reviewed_fragments(subset_name, output_dir, fragments_reviewed)
 
+```
+
+### Combine all processed
+```{r}
+batches <- c("grading_sample", "batch_1", "batch_2", "batch_3", "batch_4", "batch_5", "batch_6")
+
+output_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/process_reviewed_fragments/"
+
+fragments_included_all <- NULL
+fragments_excluded_all <- NULL
+for (b in batches){
+  included_b <- fromJSON(paste0(output_dir, "fragments_included_", b, ".json")) %>%
+    mutate(batch = b,
+           image_fragment_name = paste(image_name, fragment_name, sep = "_"))
+  fragments_included_all <- bind_rows(fragments_included_all, included_b)
+  excluded_b <- fromJSON(paste0(output_dir, "fragments_excluded_", b, ".json"))  %>%
+    mutate(batch = b,
+           image_fragment_name = paste(image_name, fragment_name, sep = "_"))
+  fragments_excluded_all <- bind_rows(fragments_excluded_all, excluded_b)
+}
+
+#remove some accidental double batched
+fragments_included_all <- fragments_included_all %>% 
+  filter(!(image_fragment_name %in% fragments_excluded_all$image_fragment_name)) %>%
+  distinct()
+
+#write_json(fragments_included_all, paste0(output_dir, "fragments_included_all.json"), pretty = TRUE)
+#write_json(fragments_excluded_all, paste0(output_dir, "fragments_excluded_all.json"), pretty = TRUE)
 ```

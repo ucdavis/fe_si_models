@@ -74,8 +74,8 @@ Sys.setenv(OGR_GEOJSON_MAX_OBJ_SIZE = 0)
 library(nngeo) #remove holes in outline
 options(scipen = 999) #turn of scientific notation
 
-#to_box <- "~/Library/CloudStorage/Box-Box/"
-to_box <- "C:/Users/15303/Box/"
+to_box <- "~/Library/CloudStorage/Box-Box/"
+#to_box <- "C:/Users/15303/Box/"
 
 generate_fragments <- function(subset,
                                tissue_dir,
@@ -739,7 +739,7 @@ to read into qupath for human-in-the-loop assessment
 ```{r, message=FALSE, warning=FALSE}
 
 #all previously processed grading_samples
-all_fragment_metadata <- fromJSON(paste0(to_box, "judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/fragments/fragments_metadata.json"))
+all_fragment_metadata <- fromJSON(paste0(to_box, "judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/fragments/fragments_metadata.json"))  %>% distinct()
 
 
 subset_name <- "batch_3"
@@ -747,6 +747,7 @@ subset_name <- "batch_3"
 subset <- fromJSON(paste0(to_box, "judits_work_keller_lab/fe_si_images/output/process_subset/subset_", subset_name, ".json"))
 
 subset_image_names <- subset$image_name
+
 
 fragment_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/fragments/")
 
@@ -767,7 +768,7 @@ unprocessed_available_tissue_images <- unprocessed_images[
 subset_to_process <- subset %>% filter(image_name %in% unprocessed_available_tissue_images)
 
 
-template <- generate_fragments(subset_to_process, tissue_dir, fragment_dir)
+#template <- generate_fragments(subset_to_process, tissue_dir, fragment_dir)
 
 
 write_json(template, paste0(fragment_dir, "fragment_metadata_", subset_name,".json"), pretty = TRUE)
@@ -789,7 +790,8 @@ file_paths_for_qupath_lenovo <- subset$file_path
 writeLines(file_paths_for_qupath_lenovo, paste0(fragment_dir, subset_name, "_processed_fragments.txt"))
 ```
 
-
+```{r}
+```
 
 ### Analyze batch_4 (for fe_si_papers/lymphocyte_distribution_patterns...)
 

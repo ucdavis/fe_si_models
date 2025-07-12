@@ -15,6 +15,8 @@ Map ai output to included small intestinal mucosa
 ### Issues / Deviations
 - Slow
 
+- many of the produced mapped_to_mucosa files cannot be opened in qupath
+
 ```{r, warning=FALSE, message=FALSE}
 library(jsonlite)
 library(tidyverse)
@@ -188,7 +190,8 @@ map_to_mucosa <- function(model_version, muc, mucosa_list, mucosa_dir, map_to_fr
     crypts_lamina_propria_outlines
   ) %>%
     mutate(mucosa_name = mucosa$mucosa_name) %>%
-    select(image_name, fragment_name, mucosa_name, name:geometry)
+    select(image_name, fragment_name, mucosa_name, name:geometry) %>%
+    st_make_valid()
 
   # Unite outlines for export
   lymphocyte_outlines_united <- bind_rows(
@@ -220,7 +223,8 @@ map_to_mucosa <- function(model_version, muc, mucosa_list, mucosa_dir, map_to_fr
     crypts_lamina_propria_united,
     crypts_lumen_united,
     lymphocyte_outlines_united
-  )
+  ) %>%
+    st_make_valid()
 
   # Write outputs
   st_write(output_layers, file.path(map_to_mucosa_dir, paste0(muc, "_", model_version,"_mapped_to_mucosa.geojson")), quiet = TRUE, delete_dsn = TRUE)
@@ -528,21 +532,26 @@ for (muc in mucosa_names[1]){
   
   st_write(mucosa_lymphocyte_centroids, paste0(output_dir, muc, "_lymphocyte_centroids.geojson"), quiet = TRUE, delete_dsn = TRUE)
   
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
 }
+
+
+```
+
+
+
+
+
+
+
+```{r}
+dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/merge_model_output/map_to_mucosa/output/map_to_mucosa/"
+
+list.files(dir, "\\.geojson$", full.names = TRUE) |>
+  vapply(function(f) {
+    message("fixing ", basename(f))
+    g <- read_sf(f, quiet = TRUE) %>% st_set_crs(0) %>% 
+      st_make_valid(g)
+      st_write(g, f, delete_dsn = TRUE)   # overwrite in place
+      return(TRUE)
+  }, logical(1))
 ```
