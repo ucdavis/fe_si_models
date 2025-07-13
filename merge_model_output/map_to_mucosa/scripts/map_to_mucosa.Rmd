@@ -539,19 +539,19 @@ for (muc in mucosa_names[1]){
 
 
 
-
-
-
-
 ```{r}
-dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/merge_model_output/map_to_mucosa/output/map_to_mucosa/"
+dir <- "C:/Users/15303/Box/judits_work_keller_lab/fe_si_models/merge_model_output/map_to_mucosa/output/map_to_mucosa"
 
 list.files(dir, "\\.geojson$", full.names = TRUE) |>
   vapply(function(f) {
-    message("fixing ", basename(f))
-    g <- read_sf(f, quiet = TRUE) %>% st_set_crs(0) %>% 
-      st_make_valid(g)
-      st_write(g, f, delete_dsn = TRUE)   # overwrite in place
+    message("checking  ", basename(f))
+    g <- read_sf(f, quiet = TRUE) %>% st_set_crs(0)
+    if (any(!st_is_valid(g))) {
+      message("fixing ", basename(f))
+      g <- st_make_valid(g)
+      st_write(g, f, delete_dsn = TRUE, quiet = TRUE)   # overwrite in place
       return(TRUE)
+    }
+    FALSE
   }, logical(1))
 ```
