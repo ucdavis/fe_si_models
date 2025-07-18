@@ -35,8 +35,8 @@ library(tidyverse)
 library(sf)
 Sys.setenv(OGR_GEOJSON_MAX_OBJ_SIZE = 0)
 
-to_box <- "~/Library/CloudStorage/Box-Box/"
-#to_box <- "C:/Users/15303/Box/" #JMW lenovo
+#to_box <- "~/Library/CloudStorage/Box-Box/"
+to_box <- "C:/Users/15303/Box/" #JMW lenovo
 
 #This function takes a vector of image names and arranges them by file size for a model_version output
 arrange_image_names <- function(image_names, model_version, ia_results_dir){
@@ -58,7 +58,7 @@ arrange_image_names <- function(image_names, model_version, ia_results_dir){
   )
   
   #Populate df
-  for (image in downloaded_image_results){
+  for (image in downloaded_image_results){ 
     file_path <- paste0(ia_results_dir, image, "_", model_version, "_processed_ia_results.geojson")
     
     #Get file size in MB
@@ -104,9 +104,9 @@ read_sf_retry <- function(path, retries = 3, wait = 5) {
   stop("failed")                          # let caller know it never worked
 }
 
-process_image_fragments <- function(image_names, model_version, ia_results_dir, fragments_dir, output_dir, included_fragments) {
+process_image_fragments <- function(arranged_images, model_version, ia_results_dir, fragments_dir, output_dir, included_fragments) {
 
-  arranged_images <- arrange_image_names(image_names, model_version, ia_results_dir)
+  #arranged_images <- arrange_image_names(image_names, model_version, ia_results_dir)
   arranged_image_names <- unique(arranged_images$image_name)
 
   files <- list.files(output_dir)
@@ -129,7 +129,9 @@ process_image_fragments <- function(image_names, model_version, ia_results_dir, 
     tryCatch({
       file_data <- arranged_images %>% filter(image_name == image)
       
-      image_combos <- read_sf_retry(file_data$file_path) %>%
+      ia_results_path <- paste0(ia_results_dir, image, "_", model_version, "_processed_ia_results.geojson")
+      
+      image_combos <- read_sf_retry(ia_results_path) %>%
         st_set_crs(0) %>%
         #add confidence pct to name
         mutate(
@@ -434,4 +436,51 @@ output_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/combos/output/
 
 process_image_fragments(image_names, model_version, combos_dir, fragments_dir, output_dir)
 ```
+
+### Process image fragment names for everything unprocessed
+
+#### Issues/Deviations comments
+There are 11 images on image_names that don't have processed ia results - found out which and if they
+correspond to partial files
+- only "f8jh" did not run (problems reading in ia_result file) - it worked on a retry
+```{r}
+map_to_fragment_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/merge_model_output/map_to_fragment/output/map_to_fragment/")
+
+ia_results_dir <-paste0(to_box, "judits_work_keller_lab/fe_si_platforms/aiforia/output/ia_results//")
+
+fragments_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/fragments/")
+
+fragments_included_all <- fromJSON(paste0(
+  to_box, "judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/process_reviewed_fragments/fragments_included_all.json"))
+
+image_fragment_names <- unique(fragments_included_all$image_fragment_name)
+
+
+model_version <- "fe_si_combos_pv2_mv2"
+
+#Filter on already processed
+not_processed <- c()
+for (image_fragment in image_fragment_names){
+  file_path <- paste0(map_to_fragment_dir,"/",image_fragment, "_", model_version, "_layers.geojson")
+  if (!file.exists(file_path)) {
+    not_processed <- c(not_processed, image_fragment)  
+  }
+}
+
+not_processed_fragments_included <- fragments_included_all %>%
+  filter(image_fragment_name %in% not_processed)
+
+image_names <- unique(not_processed_fragments_included$image_name)
+
+#do this on macbook (runs but very slowly on lenovo)
+#arranged_images <- arrange_image_names(image_names, model_version, ia_results_dir)
+
+#write_json(arranged_images, paste0(map_to_fragment_dir, "arranged_images_temp.json"))
+
+arranged_images <- fromJSON(paste0(map_to_fragment_dir, "arranged_images_temp.json"))
+
+#process the rest on lenovo
+process_image_fragments(arranged_images, model_version, ia_results_dir, fragments_dir, map_to_fragment_dir, not_processed_fragments_included)
+```
+
 

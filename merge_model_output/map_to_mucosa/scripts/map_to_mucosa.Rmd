@@ -296,6 +296,44 @@ map_all_ai_outputs(mucosa_names = mucosa_names,
 
 
 
+### Process batch 2-6
+
+```{r}
+
+subset_name <- "batch_2_to_6"
+model_version <- "fe_si_combos_pv2_mv2"
+
+included_fragments <- fromJSON(paste0(
+  to_box, "judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/process_reviewed_fragments/fragments_included_all.json")) %>%
+  distinct() %>%
+  filter(batch != "grading_sample" & batch != "batch_1")
+
+subset <- fromJSON(
+  paste0(to_box, "judits_work_keller_lab/fe_si_images/output/process_subset/subsets_all.json")) %>%
+  filter(image_name %in% included_fragments$image_name) %>%
+  distinct()
+
+
+mucosa_list  <- fromJSON("C:/Users/15303/Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/output/mucosa/mucosa_metadata_batch_2_to_6.json") %>%
+  filter((orientation_class == "adequate" | orientation_class == "marginal") & (artefact_class == "adequate" | artefact_class == "marginal")) 
+
+mucosa_dir <- "C:/Users/15303/Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/output/mucosa/"
+
+map_to_fragment_dir <- "C:/Users/15303/Box/judits_work_keller_lab/fe_si_models/merge_model_output/map_to_fragment//output/map_to_fragment//"
+
+map_to_mucosa_dir <- "C:/Users/15303/Box/judits_work_keller_lab/fe_si_models/merge_model_output/map_to_mucosa//output/map_to_mucosa//"
+
+mucosa_names <- mucosa_list$name
+
+map_all_ai_outputs(mucosa_names = mucosa_names,
+                   model_version = model_version,
+                   mucosa_list = mucosa_list,
+                   mucosa_dir = mucosa_dir,
+                   map_to_fragment_dir = map_to_fragment_dir,
+                   map_to_mucosa_dir = map_to_mucosa_dir)
+```
+
+
 ### Process combos for labl_2020_tuning
 
 #### Input
