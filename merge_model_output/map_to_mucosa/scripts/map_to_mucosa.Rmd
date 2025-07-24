@@ -15,16 +15,14 @@ Map ai output to included small intestinal mucosa
 ### Issues / Deviations
 - Slow
 
-- many of the produced mapped_to_mucosa files cannot be opened in qupath
-
 ```{r, warning=FALSE, message=FALSE}
 library(jsonlite)
 library(tidyverse)
 library(sf)
 Sys.setenv(OGR_GEOJSON_MAX_OBJ_SIZE = 0)
 
-#to_box <- "~/Library/CloudStorage/Box-Box/"
-to_box <- "C:/Users/15303/Box/"
+to_box <- "~/Library/CloudStorage/Box-Box/"
+#to_box <- "C:/Users/15303/Box/"
 
 #When merging geometries sometimes linestrings are created - these slow down further mapping
 filter_out_line_geometries <- function(sf_df, geom_col = "geometry") {
@@ -190,9 +188,8 @@ map_to_mucosa <- function(model_version, muc, mucosa_list, mucosa_dir, map_to_fr
     crypts_lamina_propria_outlines
   ) %>%
     mutate(mucosa_name = mucosa$mucosa_name) %>%
-    select(image_name, fragment_name, mucosa_name, name:geometry) %>%
-    st_make_valid()
-
+    select(image_name, fragment_name, mucosa_name, name:geometry) 
+  
   # Unite outlines for export
   lymphocyte_outlines_united <- bind_rows(
     villi_epithelium_outlines,
@@ -297,7 +294,8 @@ map_all_ai_outputs(mucosa_names = mucosa_names,
 
 
 ### Process batch 2-6
-
+#### issues/ deviations 
+I forgot to put a distinct when I read the mucosa list causing some mucosa fragments apprearning twice not to process right, copied the names from the console print and reran affected mucosa segments (chunk below)
 ```{r}
 
 subset_name <- "batch_2_to_6"
@@ -314,7 +312,7 @@ subset <- fromJSON(
   distinct()
 
 
-mucosa_list  <- fromJSON("C:/Users/15303/Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/output/mucosa/mucosa_metadata_batch_2_to_6.json") %>%
+mucosa_list  <- fromJSON(paste0(to_box, "judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/output/mucosa/mucosa_metadata_batch_2_to_6.json")) %>%
   filter((orientation_class == "adequate" | orientation_class == "marginal") & (artefact_class == "adequate" | artefact_class == "marginal")) 
 
 mucosa_dir <- "C:/Users/15303/Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/output/mucosa/"
@@ -333,7 +331,85 @@ map_all_ai_outputs(mucosa_names = mucosa_names,
                    map_to_mucosa_dir = map_to_mucosa_dir)
 ```
 
+### processed _failed slides b2-6
+reran failed instances from previous chunk (see above)
+```{r}
+subset_name <- "batch_2_to_6"
+model_version <- "fe_si_combos_pv2_mv2"
 
+included_fragments <- fromJSON(paste0(
+  to_box, "judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/process_reviewed_fragments/fragments_included_all.json")) %>%
+  distinct() %>%
+  filter(batch != "grading_sample" & batch != "batch_1")
+
+subset <- fromJSON(
+  paste0(to_box, "judits_work_keller_lab/fe_si_images/output/process_subset/subsets_all.json")) %>%
+  filter(image_name %in% included_fragments$image_name) %>%
+  distinct()
+
+
+mucosa_list  <- fromJSON(paste0(to_box, "judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/output/mucosa/mucosa_metadata_batch_2_to_6.json")) %>%
+  filter((orientation_class == "adequate" | orientation_class == "marginal") & (artefact_class == "adequate" | artefact_class == "marginal")) %>%
+  distinct()
+
+mucosa_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/output/mucosa/")
+
+map_to_fragment_dir <- paste0(to_box,"judits_work_keller_lab/fe_si_models/merge_model_output/map_to_fragment//output/map_to_fragment//")
+
+map_to_mucosa_dir <- paste0(to_box,"judits_work_keller_lab/fe_si_models/merge_model_output/map_to_mucosa//output/map_to_mucosa//")
+
+mucosa_names <- c("1dfc_02_01",
+            "1dfc_03_01",
+            "1l1t_01_01",
+            "1l1t_02_01",
+            "1dfc_02_01",
+            "1dfc_03_01",
+            "1l1t_01_01",
+            "1l1t_02_01",
+            "5l2o_01_01",
+            "5l2o_05_01",
+            "6ctv_03_01",
+            "vzuh_02_01",
+            "vzuh_05_01",
+            "vzuh_06_01",
+            "wz8d_02_01",
+            "wz8d_03_01",
+           "wz8d_04_01",
+           "wz8d_05_01",
+           "wz8d_06_01",
+           "x8xg_01_01",
+           "x8xg_03_01",
+           "x8xg_04_01",
+           "0jy3_02_03",
+           "0jy3_06_01",
+           "2921_01_01",
+           "565x_03_01",
+           "565x_04_01",
+           "565x_09_01",
+           "565x_11_01",
+           "bdb2_01_01",
+           "bdb2_01_02",
+           "bdb2_02_01",
+           "bdb2_03_01",
+           "cjx4_01_01",
+           "cjx4_03_01",
+           "cnc3_01_01",
+           "cnc3_02_01",
+           "it2h_01_01",
+           "it2h_05_01",
+           "it2h_07_01",
+           "it2h_09_01",
+           "otgr_01_02",
+           "u42o_02_01",
+          "u42o_03_01")
+
+map_all_ai_outputs(mucosa_names = mucosa_names,
+                   model_version = model_version,
+                   mucosa_list = mucosa_list,
+                   mucosa_dir = mucosa_dir,
+                   map_to_fragment_dir = map_to_fragment_dir,
+                   map_to_mucosa_dir = map_to_mucosa_dir)
+```
 ### Process combos for labl_2020_tuning
 
 #### Input

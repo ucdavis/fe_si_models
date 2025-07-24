@@ -9,52 +9,35 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-```{r}
+```{r, message=FALSE, warning=FALSE}
 library(jsonlite)
 library(tidyverse)
-
 to_box <- "~/Library/CloudStorage/Box-Box/"
-
-subset_name <- "batch_2_to_6"
 model_version <- "fe_si_combos_pv2_mv2"
+subset_name <- "all"
 
 included_fragments <- fromJSON(paste0(
   to_box, "judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/process_reviewed_fragments/fragments_included_all.json")) %>%
-  distinct() %>%
-  filter(batch != "grading_sample" & batch != "batch_1")
+  distinct() 
 
 subset <- fromJSON(
   paste0(to_box, "judits_work_keller_lab/fe_si_images/output/process_subset/subsets_all.json")) %>%
   filter(image_name %in% included_fragments$image_name) %>%
+  distinct() %>%
+  select(image_name, pixel_length_um, pixel_area_um2)
+
+
+mucosa_list  <- fromJSON(paste0(to_box, "/judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/output/mucosa/mucosa_list_all.json")) %>%
+  left_join(subset) %>%
+  filter((orientation_class == "adequate" | orientation_class == "marginal") & (artefact_class == "adequate" | artefact_class == "marginal")) %>%
   distinct()
 
+image_fragment_mucosa_names <- mucosa_list$name
 
+which(image_fragment_mucosa_names == "17B1216_T1_he_2025-02-06_03_01")
+```
 
-fragment_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/fragments/")
+```{r}
 
-map_to_fragment_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/merge_model_output/map_to_fragment/output/map_to_fragment/")
-
-mucosa_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/output/mucosa/")
-
-image_fragment_names <- unique(included_fragments$image_fragment_name)
-image_names <- unique(included_fragments$image_name)
-
-#Check that all images have downloaded and processed layer files
-map_to_fragment_files <- list.files(map_to_fragment_dir)
-matching_image_fragment_names <- image_fragment_names[
-  sapply(image_fragment_names, function(name) any(startsWith(map_to_fragment_files, name)))
-  ]
-
-non_matching_image_fragment_names <- image_fragment_names[
-  !sapply(image_fragment_names, function(name) any(startsWith(map_to_fragment_files, name)))
-]
-
-fragments_metadata <- fromJSON(paste0(to_box, "judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/fragments/fragments_metadata.json")) %>%
-  mutate(image_fragment_name = paste(image_name, fragment_name, sep = "_")) %>%
-  filter(image_fragment_name %in% matching_image_fragment_names) %>%
-  distinct()
-
-image_fragment_names <- fragments_metadata$image_fragment_name
-
-which(image_fragment_names == "01B2083_T6_he_2025-02-04_04")
+feature_summaries_all <- fromJSON("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_papers/lymphocyte_distribution_patterns_in_feline_small_intestinal_biopsies/output/lymphocyte_distribution_features/feature_summaries/lymphocyte_feature_summaries_all.json")
 ```

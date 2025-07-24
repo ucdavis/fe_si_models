@@ -45,7 +45,7 @@ For all processed fragments
 
 
 ## Issues/Deviations/Comments/2 Do
-
+- Too small fragments have not been log. Likely makes up the bulk of the 630 fragment diff between included fragments and processed mucosa. The rest should be logged in the mucosa_error txt file. The loop has been adjusted but not run,. Rerun it when time. - fixed it amended mucosa_list saved as mucosa_list_all.json
 
 ```{r, message=FALSE, warning=FALSE}
 library(tidyverse)
@@ -55,8 +55,8 @@ library(writexl)
 library(readxl)
 Sys.setenv(OGR_GEOJSON_MAX_OBJ_SIZE = "0") #Allows processing of large files
 
-#to_box <- "~/Library/CloudStorage/Box-Box/"
-to_box <- "C:/Users/15303/Box/"
+to_box <- "~/Library/CloudStorage/Box-Box/"
+#to_box <- "C:/Users/15303/Box/"
 
 read_sf_retry <- function(path, retries = 3, wait = 5) {
   attempt <- 1
@@ -94,10 +94,12 @@ process_mucosa <- function(model_version,
   
   checkpoint_file <- file.path(mucosa_dir, "subset_mucosa_metadata_checkpoint.rds")
   
-  log_meta <- function(df){               # df is st_drop_geometry(mucosa)
-    subset_mucosa_metadata <<- dplyr::bind_rows(subset_mucosa_metadata, df)
-    saveRDS(subset_mucosa_metadata, checkpoint_file)  # instant disk backup
-  }
+  log_meta <- function(df, checkpoint_file) {
+  meta <- if (file.exists(checkpoint_file)) readRDS(checkpoint_file) else tibble()
+  meta <- dplyr::bind_rows(meta, df)
+  saveRDS(meta, checkpoint_file)
+  meta                      
+}
 
   image_names <- unique(fragment_metadata$image_name)
   image_fragment_names <- unique(fragment_metadata$image_fragment_name)
@@ -149,7 +151,10 @@ process_mucosa <- function(model_version,
         
          st_write(mucosa, paste0(mucosa_dir, mucosa$name, "_mucosa.geojson"), quiet = TRUE, delete_dsn = TRUE)
          
-          log_meta(st_drop_geometry(mucosa))
+         subset_mucosa_metadata <- log_meta(
+           st_drop_geometry(mucosa),
+           checkpoint_file           
+           )
           
           next
       }
@@ -165,7 +170,58 @@ process_mucosa <- function(model_version,
         mutate(classification = "mucosa",
                area_px2 = st_area(geometry),
                area_um2 = area_px2 * pixel_area_um2,
-               area_1000_um2 = area_um2 / 1000) %>%
+               area_1000_um2 = area_um2 / 1000) 
+      
+      #Handle cases with no layers (no recognized villi or crypts of any confidence)
+      
+      if (!(any(mucosa_draft$area_1000_um2 > min_area_1000_um2))) {
+         
+          for (muc_part in 1:nrow(mucosa_draft)) {
+             mucosa <- mucosa_draft[muc_part, ]%>%
+               mutate(mucosa_name = sprintf("%02d", muc_part) ,
+                      name = paste(img, frag, mucosa_name, sep = "_"),
+                      classification = "too_small",
+                     orientation_class = NA,
+                     artefact_class = NA,
+                     villi_area_1000_um2 = NA,
+                     crypts_area_1000_um2 = NA,
+                     pct_villi = NA,
+                     pct_crypts = NA,
+                     pct_shared_border_villi = NA,
+                     pct_shared_border_crypts = NA,
+                     quality_villi_1000_um2 = NA,
+                     quality_crypts_1000_um2 = NA,
+                     quality_pct_villi = NA,
+                     quality_pct_crypts = NA) %>%
+              select(image_name, 
+                     fragment_name,
+                     mucosa_name, 
+                     name, 
+                     classification, 
+                     orientation_class, 
+                     artefact_class, 
+                     area_1000_um2, 
+                     villi_area_1000_um2, 
+                     crypts_area_1000_um2, 
+                     pct_villi, pct_crypts, 
+                     pct_shared_border_villi, 
+                     pct_shared_border_crypts, 
+                     quality_villi_1000_um2, 
+                     quality_crypts_1000_um2, 
+                     quality_pct_villi, 
+                     quality_pct_crypts, 
+                     geometry)
+              st_write(mucosa, paste0(mucosa_dir, mucosa$name, "_mucosa.geojson"), quiet = TRUE, delete_dsn = TRUE)
+              subset_mucosa_metadata <- log_meta(
+                st_drop_geometry(mucosa),
+                checkpoint_file            
+)
+          }
+          next
+      }
+      
+      
+      mucosa_draft <- mucosa_draft %>%
         filter(area_1000_um2 > min_area_1000_um2) %>%
         mutate(mucosa_name = str_pad(rank(-area_px2, ties.method = "first"), width = 2, pad = "0"),
                name = paste(img, frag, mucosa_name, sep = "_")) %>%
@@ -183,6 +239,7 @@ process_mucosa <- function(model_version,
       compartments_path <- paste0(map_to_fragment_dir, image_fragment, "_", model_version, "_compartments.geojson")
       
       compartments <- read_sf_retry(compartments_path) %>% st_set_crs(0)
+      
       
       #Process by individual mucosa polygons within fragments
       
@@ -279,7 +336,9 @@ process_mucosa <- function(model_version,
           
            st_write(mucosa, paste0(mucosa_dir, mucosa$name, "_mucosa.geojson"), quiet = TRUE, delete_dsn = TRUE)
            
-            log_meta(st_drop_geometry(mucosa))
+            subset_mucosa_metadata <- log_meta(
+              st_drop_geometry(mucosa),
+              checkpoint_file)
             
             next
         }
@@ -453,27 +512,29 @@ process_mucosa <- function(model_version,
             
             st_write(mucosa, paste0(mucosa_dir, mucosa$name, "_mucosa.geojson"), quiet = TRUE, delete_dsn = TRUE)
             
-            log_meta(st_drop_geometry(mucosa))
+            subset_mucosa_metadata <- log_meta(
+              st_drop_geometry(mucosa),
+              checkpoint_file)
           
          }, error = function(e) {
           message(sprintf("Error processing mucosa part %s in image fragment %s: %s", 
-                          muc_part, image_fragment, e$message))
+                          muc_part, img, frag, image_fragment, e$message))
           # Optionally: log to a file
-          cat(sprintf("ERROR: %s - %s\n", muc_part, e$message), 
+          cat(sprintf("ERROR: %s - %s\n", img, frag, image_fragment,muc_part, e$message), 
               file = paste0(mucosa_dir, "mucosa_processing_errors.txt"), append = TRUE)
           # Skip to next muc_part
         })
        }
       }, error = function(e) {
-    message(sprintf("Error processing image fragment %s: %s", image_fragment, e$message))
-    cat(sprintf("ERROR: %s - %s\n", image_fragment, e$message), 
+    message(sprintf("Error processing image fragment %s: %s", img, frag, image_fragment, e$message))
+    cat(sprintf("ERROR: %s - %s\n", img, frag, image_fragment, e$message), 
         file = paste0(mucosa_dir, "mucosa_processing_errors.txt"), append = TRUE)
     # Skip to next image_fragment
       })
   }
   
   
-  
+  subset_mucosa_metadata <- readRDS(checkpoint_file)
   return(subset_mucosa_metadata)
 }
 
@@ -657,14 +718,108 @@ artefact_adequate_th <- 95
 artefact_marginal_th <- 70
 
 
+#mucosa_metadata_subset <- process_mucosa(model_version, subset, fragments_metadata, fragment_dir, map_to_fragment_dir, mucosa_dir)
+
+
+#write_json(mucosa_metadata_subset, "C:/Users/15303/Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/output/mucosa/mucosa_metadata_batch_2_to_6.json", pretty = TRUE)
+```
+
+### Failed mucosa
+This is to troubleshoot included image_fragments, where I have mapped_to_mucosa output but are
+not in the mucosa metadata output
+
+
+```{r}
+library(jsonlite)
+library(tidyverse)
+
+min_area_1000_um2 <- 500
+high_conf_limit <- 100
+orientation_adequate_th <- 30
+orientation_marginal_th <-  10
+artefact_adequate_th <- 95
+artefact_marginal_th <- 70
+
+subset_name <- "failed_all"
+model_version <- "fe_si_combos_pv2_mv2"
+
+included_fragments <- fromJSON("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/process_reviewed_fragments/fragments_included_all.json") %>%
+  distinct() 
+
+subset <- fromJSON(
+  paste0(to_box, "judits_work_keller_lab/fe_si_images/output/process_subset/subsets_all.json")) %>%
+  filter(image_name %in% included_fragments$image_name) %>%
+  distinct()
+
+mucosa_list_b0 <- fromJSON("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/output/mucosa/mucosa_metadata_grading_sample.json") 
+mucosa_list_b1 <- fromJSON("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/output/mucosa/mucosa_metadata_batch_1.json") 
+mucosa_list_b2_to_b6 <- fromJSON("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/output/mucosa/mucosa_metadata_batch_2_to_6.json") 
+mucosa_list_failed <- fromJSON("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/output/mucosa/mucosa_metadata_failed_all.json")
+
+mucosa_list <- bind_rows(mucosa_list_b0, mucosa_list_b1, mucosa_list_b2_to_b6, mucosa_list_failed) %>%
+  distinct()  %>%
+  mutate(image_fragment_name = paste(image_name, fragment_name, sep = "_"))
+
+
+lost_fragments <- included_fragments %>%
+  filter(!image_fragment_name  %in% mucosa_list$image_fragment_name) 
+
+lost_image_fragment_names <- lost_fragments$image_fragment_name
+
+#Did I map layers? #yes n = 31 #no = 87
+map_to_fragment_dir <- paste0("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/merge_model_output/map_to_fragment/output/map_to_fragment/") 
+
+map_to_fragment_files <- list.files(map_to_fragment_dir)
+matching_lost_image_fragment_names <- lost_image_fragment_names[
+  sapply(lost_image_fragment_names, function(name) any(startsWith(map_to_fragment_files, name)))
+  ]
+
+non_matching_lost_image_fragment_names <- lost_image_fragment_names[
+  !sapply(lost_image_fragment_names, function(name) any(startsWith(map_to_fragment_files, name)))
+]
+
+failed_mucosa <- lost_fragments %>% 
+  filter(image_fragment_name %in% matching_lost_image_fragment_names)
+
+
+write_json(failed_mucosa, "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/output/mucosa/image_fragments_failed_mucosa.json", pretty = TRUE)
+
+image_fragment_names <- failed_mucosa$image_fragment_name
+image_names <- failed_mucosa$image_name
+
+fragments_metadata <- fromJSON(paste0(to_box, "judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/fragments/fragments_metadata.json")) %>%
+  mutate(image_fragment_name = paste(image_name, fragment_name, sep = "_")) %>%
+  filter(image_fragment_name %in% image_fragment_names) %>%
+  distinct()
+
+fragment_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/fragments/")
+
+map_to_fragment_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/merge_model_output/map_to_fragment/output/map_to_fragment/")
+
+mucosa_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/output/mucosa/")
+
 mucosa_metadata_subset <- process_mucosa(model_version, subset, fragments_metadata, fragment_dir, map_to_fragment_dir, mucosa_dir)
 
 
-write_json(mucosa_metadata_subset, "C:/Users/15303/Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/output/mucosa/mucosa_metadata_batch_2_to_6.json", pretty = TRUE)
+write_json(mucosa_metadata_subset, "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/output/mucosa/mucosa_metadata_failed_all_2.json", pretty = TRUE)
+
 ```
 
+```{r}
+mucosa_list_b0 <- fromJSON("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/output/mucosa/mucosa_metadata_grading_sample.json") 
+mucosa_list_b1 <- fromJSON("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/output/mucosa/mucosa_metadata_batch_1.json") 
+mucosa_list_b2_to_b6 <- fromJSON("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/output/mucosa/mucosa_metadata_batch_2_to_6.json") 
+mucosa_list_failed <- fromJSON("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/output/mucosa/mucosa_metadata_failed_all.json")
+mucosa_list_failed_2 <- fromJSON("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/output/mucosa/mucosa_metadata_failed_all_2.json")
+mucosa_list <- bind_rows(mucosa_list_b0, mucosa_list_b1, mucosa_list_b2_to_b6, mucosa_list_failed, mucosa_list_failed_2) %>%
+  distinct()  %>%
+  mutate(image_fragment_name = paste(image_name, fragment_name, sep = "_"))
 
+lost_fragments <- included_fragments %>%
+  filter(!image_fragment_name  %in% mucosa_list$image_fragment_name) 
 
+write_json(mucosa_list, paste0(mucosa_dir, "mucosa_list_all.json"), pretty = TRUE)
+```
 
 #### Process subset_labl_2020_tuning
 PREVIOUS VERSION - USED FOR ESTIMATING TUNING PERFORMANCE 
