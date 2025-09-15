@@ -47,5 +47,6 @@ Training sets batch 1-3 were used for initial parameter setting and the tuning s
 for visual assessment.
 
 Validation outline is here:
+
 ![Schematic](assets/overview_fragment_validation.png)
 
