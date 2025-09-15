@@ -14,11 +14,15 @@ Separate tissue fragments in whole slide images.
 The objective of this model is to generate polygons around separate tissue fragments, and label 
 fragments for inclusion or as duplicates.
 
+
 ## Parameters
 All parameters were set by testing out different settings in a training set "labl_2020_training_1" and 
 for some adjusting them based on visual assessments in the tuning set "labl_2020_tuning".
+Overall parameter considerations are documented here: 
+https://docs.google.com/presentation/d/1xkq8taQLPyDGGBXHvPUUdNSJ6sKDB7N9irXfKfqZ8Ik/edit?usp=sharing
 - **tolerance_value**
-Sets how much the original polygons are simplified (simplifies compute)
+Sets how much the original polygons are simplified (simplifies compute). Decision support documented here:
+https://docs.google.com/presentation/d/1fPcfghOvNunEf7Jr9n4pZ_WsyBT0uYPePZOsBAoQMOM/edit?usp=sharing
 - **merge_buffer_um**
 The first step in generating fragments is merging tissue polygons within (double)
 this distance from each other
@@ -59,7 +63,7 @@ to read into qupath for human-in-the-loop assessment
 (unable to find optimal settings for merge_buffer_um and separate_buffer_um to work for 
 all instances.  These could possibly be filtered based on size 
 but after merging with villi/crypts probably.
--  duplicate fragment sets that are unusually close to each other are not identified 
+- duplicate fragment sets that are unusually close to each other are not identified 
 as separate fragment sets and thus not excluded. Prioritized not "overcalling" duplicates
 when setting these parameters to not loose fragments.
 - rarely the simplification causes invalid outputs - in cases this happen I have added error checks that instead processed the unsimplified tissue

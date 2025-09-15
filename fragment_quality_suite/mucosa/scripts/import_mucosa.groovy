@@ -1,6 +1,6 @@
 
 // Imports annotations of defined class with fragment numbers from defined input directory (run for project)
-def inputDir = "/Users/jmwulcan/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/mucosa/output/mucosa/"
+def inputDir = "/Users/jmwulcan/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/output/mucosa/"
 
 def className = "mucosa" // Update this with your class name
 

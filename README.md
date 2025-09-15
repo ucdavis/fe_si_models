@@ -8,25 +8,30 @@ and testing.
 
 ![Schematic](assets/fe_si_models.png)
 
-For aiforia models, model versions and project versions are tracked here:
-https://docs.google.com/spreadsheets/d/1Bg5ZT4h1TjjKgKP76iZ03OzNSspau0jlSxPWKsOVVXw/edit?usp=sharing
+### Fragment-quality suite
+- **tissues** (classic ML, qupath, input for fragments)
+- **fragments** (rule-based)
+- **mucosa** (rule-based)
 
-### Histology-component model suite
+### Histology-component suite
+These are all developed in aiforia. Model versions and project versions 
+(and previous names if applicable) are tracked here: 
+https://docs.google.com/spreadsheets/d/1Bg5ZT4h1TjjKgKP76iZ03OzNSspau0jlSxPWKsOVVXw/edit?usp=sharing
 - **layers** (CNN, aiforia, combined with compartments (parent to) and 
 lymphocytes in aiforia)
 - **compartments** (CNN, combined with layers (child to) and lymphocytes 
 (parent to) in aiforia)
-- **lymphocytes*** (CNN, aiforia, combined with layers (grandchild to) and 
+- **lymphocytes** (CNN, aiforia, combined with layers (grandchild to) and 
 compartments (child to) in aiforia)
 
-### Fragment-quality model suite
-- *content_vs_background* (rule-based, qupath, predecessor to tissues - not in use)
-- **tissues** (classic ML, qupath, input for fragments)
-- **fragments** (rule-based fusion model)
-- **mucosa** (rule-based fusion model)
+### Merge_model_output
+- **map_to_fragment** (script that maps layers, compartment and lymphocytes output
+to specific fragments)
+- **map_to_mucosa** (script that maps layers, compartments and lymphocytes to specific
+mucosal segments)
 
-
-### Merging model output steps
-- **map_to_fragment** merging step where DL model output is maooe
-- **map_to_mucosa** merging step
+### Historic
+contains models and files not currently in use - kept for documentation only
+- **content_vs_background** (rule based, predecessor to "tissues")
+- **scraped_aiforia_data_2021**
 

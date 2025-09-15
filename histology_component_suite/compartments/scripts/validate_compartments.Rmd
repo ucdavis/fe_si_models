@@ -14,6 +14,8 @@ Validate tissue compartments
 
 ## Issues / Deviations
 Have made minor changes to figures but not rerun to save 
+
+### Libraries, directorie and functions
 ```{r, message=FALSE}
 library(sf)
 Sys.setenv(OGR_GEOJSON_MAX_OBJ_SIZE = 0)
@@ -62,7 +64,6 @@ convert_linestrings_to_polygons <- function(sf_df) {
 
 combine_annotations_and_ai_output <- function(project_version,
                                               image_names, 
-                                              fragment_dir,
                                               annotation_dir, 
                                               ai_output_dir, 
                                               output_dir) {
@@ -82,36 +83,16 @@ combine_annotations_and_ai_output <- function(project_version,
              confidence_percentage = 100) %>%
       select(image_name, classification, confidence_percentage, source, geometry)
 
-    # Read fragments
-    fragments_path <- file.path(fragment_dir, paste0(img, "_fragments.geojson"))
-    fragments <- st_read(fragments_path, quiet = TRUE) %>% st_set_crs(0)
-
-    # Find the fragments that overlap with the roi
-    intersects_idx <- st_intersects(fragments, roi, sparse = FALSE)[,1]
-    fragment_with_roi <- fragments %>% filter(intersects_idx)
-
-    if (nrow(fragment_with_roi) == 0) {
-      warning(paste("No overlapping fragments found for image:", img))
-      next
-    }
-
-    fragment_names <- fragment_with_roi$name
-
-    # Read and combine AI outputs from each fragment
-    ai_outputs <- lapply(fragment_names, function(fragment_name) {
-      ai_output_path <- file.path(ai_output_dir, paste0(img, "_", fragment_name, "_tissues.geojson"))
-      if (file.exists(ai_output_path)) {
-        st_read(ai_output_path, quiet = TRUE) %>%
-          st_set_crs(0) %>%
-          mutate(source = "ai") %>%
+    ai_path <- paste0(ai_output_dir, img, "_", model_version, "_processed_ia_results.geojson")
+    
+    ai <- st_read(ai_path) %>% st_set_crs(0) %>%
+      filter(classification == "epithelium" |
+               classification == "lamina_propria" |
+               classification == "lumen") %>%
+      mutate(source = "ai",
+             image_name = img) %>%
           select(image_name, classification, confidence_percentage, source, geometry)
-      } else {
-        warning(paste("Missing AI output file:", ai_output_path))
-        NULL
-      }
-    })
 
-    ai_outputs <- bind_rows(ai_outputs)
 
     # Read and prepare annotations
     annotations_path <- file.path(annotation_dir, paste0(img, "_", project_version,"_annotations.geojson"))
@@ -131,7 +112,7 @@ combine_annotations_and_ai_output <- function(project_version,
       summarise(geometry = st_union(geometry), .groups = "drop")
 
     # Combine all
-    combined_sf <- bind_rows(roi, annotations_united, ai_outputs)
+    combined_sf <- bind_rows(roi, annotations_united, ai)
 
     # Write output
     output_path <- file.path(output_dir, paste0(img, "_",project_version,"_combined.geojson"))
@@ -529,7 +510,7 @@ compute_class_metrics_thresholds <- function(sf, cls, thresholds, palette) {
 ```
 
 
-### Validate fe_si_tissues_pv4 on labl_2020_tuning
+### Validate fe_si_tissues_pv4 on labl_2020_tuning (historic)
 
 #### Input
 - *<image_name>_fragments.geojson* (fe_si_models/fragments/output/fragments)
@@ -537,7 +518,7 @@ Geojsons with all tissue fragments for an image. Generated with the model "fragm
 - *<image_name>_<fragment_name>_tissues.geojson* (fe_si_models/combos/output/combos)
 geojson with all ai output for the model of each fragment. Downloaded results of combination model from aiforia processed with the script "combos". 
 - *<image_name>_<model_version>_annotations.geojson* (fe_si_models/aiforia_annotations/)
-Tuning annotations by jmw in aiforia downloaed and processed with aiforia/annotations.
+Tuning annotations by jmw in aiforia downloaded and processed with aiforia/annotations.
 - *subset_<image_subset_name>.json* (fe_si_images/process/subset/)
 
 #### Output
@@ -545,7 +526,7 @@ Tuning annotations by jmw in aiforia downloaed and processed with aiforia/annota
 geojson with both ai output and annotations and rois. 
 - *<model_version>_<image_subset_name>_processed_normalized.geojson* (fe_si_models/tissues/output/validate_tissues)
 geojson with ai output and annotations processed by and normalized to rois. 
-- *<model_version>_<image_subset_name>_output_and_annpotations_compositon.json* (fe_si_models/tissues/output/validate_tissues)
+- *<model_version>_<image_subset_name>_output_and_annpotations_composition.json* (fe_si_models/tissues/output/validate_tissues)
 Table with pct of each class for output and annotations.
 - *<model_version>_<image_subset_name>_output_and_annotations_compositon.png* (fe_si_models/tissues/output/validate_tissues)
 Figure with pct of each class for output and annotations.
@@ -562,6 +543,9 @@ Table with true positive area size, false positive area size and positive predic
 -*<model_version>_<image_subset_name>_calibration_<class>.png* (fe_si_models/tissues/output/validate_tissues)
 Positive predicitve values for predictions of different confidence percentages - OBS - the number and size of predictions of different confidence varies, making this comparison tricky to interpret.
 
+#### Issues / deviations
+- Tuning set was run before reorganizing models - renaming this model to compartments etc. Kept for documentation
+will not reproduce w/o some work.
 ```{r}
 #define project
 image_subset <- "labl_2020_tuning"
@@ -793,5 +777,251 @@ print(lumen_metrics_by_threshold$plot)
 dev.off()
 ```
 
+
+
+
+### Validate on test set
+```{r}
+#define project
+image_subset <- "labl_2020_test"
+project_version <- "fe_si_tissues_pv4"
+model_version <- "fe_si_combos_pv2_mv2"
+output_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab//fe_si_models/histology_component_suite/compartments//output/validate_compartments/"
+
+ai_output_dir <-  "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_platforms/aiforia/output/ia_results/"
+
+annotation_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab//fe_si_models/histology_component_suite/compartments//output/aiforia_annotations/"
+
+output_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab//fe_si_models/histology_component_suite/compartments//output/validate_compartments//"
+
+#choose images (filter on images that has both annotations and ai output)
+
+subset_labl_2020_test<- fromJSON("~/Library/CloudStorage/Box-Box/judits_work_keller_lab//fe_si_images/output/process_subset/subset_labl_2020_test.json") %>%
+  select(image_name, pixel_length_um, pixel_area_um2)
+
+image_names_all <- subset_labl_2020_test$image_name
+
+#Filter on available annotation file (not all tuning images annotated for all models)
+annotation_files <- list.files(annotation_dir)
+annotation_image_names <- image_names_all[
+    sapply(image_names_all, function(name) any(startsWith(annotation_files, name)))
+  ]
+  
+ai_output_files <- list.files(ai_output_dir)
+image_names <- annotation_image_names[
+    sapply(annotation_image_names, function(name) any(startsWith(ai_output_files, name)))
+  ]
+
+#Generate combined sf dataframes with annotations, ai output and rois - save a df with these for all images
+combined_sf <- combine_annotations_and_ai_output(project_version, image_names, annotation_dir, ai_output_dir, output_dir)
+
+st_write(combined_sf, paste0(output_dir, model_version, "_", image_subset ,"_combined.geojson"))
+
+```
+
+
+```{r}
+processed_all <- NULL
+
+for (img in image_names){
+  combined_sf_path <- paste0(output_dir, img, "_", project_version, "_combined.geojson")
+  
+  combined_sf <- st_read(combined_sf_path, quiet = TRUE) %>% st_set_crs(0)
+  
+  processed_by_roi <- process_roi(combined_sf)
+  
+  processed_by_roi_normalized <- process_val_sf(processed_by_roi) %>%
+    left_join(subset_labl_2020_test) %>%
+    mutate(area_um2 = area_px2 * pixel_area_um2,
+           area_mm2 = area_um2 / 1000000)
+  
+  processed_all <- rbind(processed_all, processed_by_roi_normalized)
+}
+
+st_write(processed_all, paste0(output_dir, model_version, "_", image_subset,"_processed_normalized.geojson"), quiet = TRUE, delete_dsn = TRUE)
+
+areas <- processed_all %>%
+  group_by(source, classification) %>%
+  summarise(area_mm2 = sum(area_mm2))
+```
+
+
+```{r}
+
+
+class_palette <- c("epithelium" = "orange", "lamina_propria" = "blue", "lumen" = "lightblue", "empty" = "grey")
+
+processed_no_roi <- processed_all %>% filter(classification != "roi")
+
+composition <- explore_composition(processed_no_roi, class_palette)
+
+print(composition)
+
+write_json(composition$summary,  paste0(output_dir, model_version, "_", image_subset,  "_output_and_annotation_composition.json"), pretty = TRUE)
+
+png_file_path <- paste0(output_dir, model_version, "_", image_subset, "_output_and_annotation_composition.png")
+png(png_file_path, width = 3.5, height = 3.5, units = "in", res = 300) # resize to width 5 after
+print(composition$plot)
+dev.off()
+
+
+bin_breaks <- c(0, 10, 20, 30, 40, 50, 60, 70,  80,  90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101)
+
+bin_labels <- c("0-10", 
+                 "10-20",
+                 "20-30",
+                 "30-40",
+                 "40-50",
+                 "50-60",
+                 "60-70",
+                 "70-80",
+                 "80-90",
+                 "90-91",
+                "91-92",
+                "92-93",
+                "93-94",
+                "94-95",
+                "95-96",
+                "96-97",
+                "97-98",
+                "98-99",
+                "99-100",
+                "100")
+
+calibration_epithelium <- explore_calibration(processed_all, "epithelium", bin_breaks, bin_labels)
+
+print(calibration_epithelium)
+
+calibration_lamina_propria <- explore_calibration(processed_all, "lamina_propria", bin_breaks, bin_labels)
+
+print(calibration_lamina_propria)
+
+calibration_lumen <- explore_calibration(processed_all, "lumen", bin_breaks, bin_labels)
+
+print(calibration_lumen)
+
+confidence_palette <- c("89-90" = "#FDE0C2",
+                        "90-91" = "#FDD6AF",
+                        "91-92" = "#FDCC9C",
+                        "92-93" = "#FDBE85",
+                        "93-94" = "#FDAF6D",
+                        "94-95" = "#FA8533",
+                        "95-96" = "#EF6712",
+                        "96-97" = "#C84201",
+                        "97-98" = "#B33A02",
+                        "98-99" = "#9F3303",
+                        "99-100" = "#7F2704"
+                        )
+explored_confidence <- explore_ai_confidence(processed_all, confidence_palette)
+
+print(explored_confidence)
+
+write_json(explored_confidence$summary,  paste0(output_dir, model_version, "_", image_subset,"_explored_confidence.json"), pretty = TRUE)
+
+png_file_path <- paste0(output_dir, model_version, "_", image_subset,"_explored_confidence.png")
+png(png_file_path, width = 3.5, height = 3.5, units = "in", res = 300) 
+print(explored_confidence$plot)
+dev.off()
+
+
+thresholds <- c(40, 50, 60, 70, 80, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100)
+threshold_palette <- c("100" = "#7F2704",
+                       "99" = "#9F3303",
+                       "98" = "#B33A02",
+                       "97" = "#C84201",
+                       "96" = "#EF6712",
+                       "95" = "#FA8533",
+                       "94" = "#FDAF6D",
+                       "93" = "#FDBE85",
+                       "92" = "#FDCC9C",
+                       "91" = "#FDD6AF",
+                       "90" = "#FDE0C2"
+                       
+                       )
+
+epithelium_metrics_by_threshold <- compute_class_metrics_thresholds(processed_all, "epithelium", thresholds, threshold_palette)
+
+print(epithelium_metrics_by_threshold)
+
+thresholds <- c(40, 50, 60, 70, 80, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100)
+threshold_palette <- c("100" = "#7F2704",
+                       "99" = "#9F3303",
+                       "98" = "#B33A02",
+                       "97" = "#C84201",
+                       "96" = "#EF6712",
+                       "95" = "#FA8533",
+                       "94" = "#FDAF6D",
+                       "93" = "#FDBE85",
+                       "92" = "#FDCC9C",
+                       "91" = "#FDD6AF",
+                       "90" = "#FDE0C2"
+                       
+                       )
+
+lamina_propria_metrics_by_threshold <- compute_class_metrics_thresholds(processed_all, "lamina_propria", thresholds, threshold_palette)
+
+print(lamina_propria_metrics_by_threshold)
+
+thresholds <- c(40, 50, 60, 70, 80, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100)
+threshold_palette <- c("100" = "#7F2704",
+                       "99" = "#9F3303",
+                       "98" = "#B33A02",
+                       "97" = "#C84201",
+                       "96" = "#EF6712",
+                       "95" = "#FA8533",
+                       "94" = "#FDAF6D",
+                       "93" = "#FDBE85",
+                       "92" = "#FDCC9C",
+                       "91" = "#FDD6AF",
+                       "90" = "#FDE0C2"
+                       
+                       )
+
+lumen_metrics_by_threshold <- compute_class_metrics_thresholds(processed_all, "lumen", thresholds, threshold_palette)
+
+print(lumen_metrics_by_threshold)
+
+write_json(calibration_epithelium$summary,  paste0(output_dir, model_version, "_", image_subset, "_calibration_epithelium.json"), pretty = TRUE)
+
+png_file_path <- paste0(output_dir, model_version, "_", image_subset, "_calibration_epithelium.png")
+png(png_file_path, width = 3.5, height = 3.5, units = "in", res = 300) 
+print(calibration_epithelium$plot)
+dev.off()
+
+write_json(calibration_lamina_propria$summary,  paste0(output_dir, model_version, "_", image_subset, "_calibration_lamina_propria.json"), pretty = TRUE)
+
+png_file_path <- paste0(output_dir, model_version, "_", image_subset, "_calibration_lamina_propria.png")
+png(png_file_path, width = 3.5, height = 3.5, units = "in", res = 300) 
+print(calibration_lamina_propria$plot)
+dev.off()
+
+write_json(calibration_lumen$summary,  paste0(output_dir, model_version, "_", image_subset,"_calibration_lumen.json"), pretty = TRUE)
+
+png_file_path <- paste0(output_dir, model_version, "_", image_subset,"_calibration_lumen.png")
+png(png_file_path, width = 3.5, height = 3.5, units = "in", res = 300) 
+print(calibration_lumen$plot)
+dev.off()
+
+write_json(epithelium_metrics_by_threshold$metrics,  paste0(output_dir, model_version, "_", image_subset, "_metrics_epithelium.json"), pretty = TRUE)
+
+png_file_path <- paste0(output_dir, model_version, "_", image_subset, "_metrics_epithelium.png")
+png(png_file_path, width = 3.5, height = 3.5, units = "in", res = 300) 
+print(epithelium_metrics_by_threshold$plot)
+dev.off()
+
+write_json(lamina_propria_metrics_by_threshold$metrics,  paste0(output_dir, model_version, "_", image_subset, "_metrics_lamina_propria.json"), pretty = TRUE)
+
+png_file_path <- paste0(output_dir, model_version, "_", image_subset, "_metrics_lamina_propria.png")
+png(png_file_path, width = 3.5, height = 3.5, units = "in", res = 300) 
+print(lamina_propria_metrics_by_threshold$plot)
+dev.off()
+
+write_json(lumen_metrics_by_threshold$metrics,  paste0(output_dir, model_version, "_", image_subset, "_metrics_lumen.json"), pretty = TRUE)
+
+png_file_path <- paste0(output_dir, model_version, "_", image_subset,"_metrics_lumen.png")
+png(png_file_path, width = 3.5, height = 3.5, units = "in", res = 300) 
+print(lumen_metrics_by_threshold$plot)
+dev.off()
+```
 
 

@@ -35,8 +35,8 @@ library(tidyverse)
 library(sf)
 Sys.setenv(OGR_GEOJSON_MAX_OBJ_SIZE = 0)
 
-#to_box <- "~/Library/CloudStorage/Box-Box/"
-to_box <- "C:/Users/15303/Box/" #JMW lenovo
+to_box <- "~/Library/CloudStorage/Box-Box/"
+#to_box <- "C:/Users/15303/Box/" #JMW lenovo
 
 #This function takes a vector of image names and arranges them by file size for a model_version output
 arrange_image_names <- function(image_names, model_version, ia_results_dir){
@@ -278,12 +278,12 @@ output_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_model
 process_image_fragments(image_names, model_version, ia_results_dir, fragments_dir, output_dir, included_fragments)
 ```
 
-### REDO THIS AS YOU PROCESS BATCHES - OBS MAY WANT TO KEEP OLD PROCESS SINCE USED FOR VALIDATIING COMPONENT MODELS    
+  
 ### Process image fragment for labl_2020_tuning model fe_si_combos_pv2_mv2
 Processes image fragments for labl_2020 tuning image if the results for the corresponding model has been downloaded
 
 #### Issues/Deviations
-Got errors when processing the larger images on PC (lenovo) but not on macbook
+Done on old version of function - keep for documentation
 
 ```{r, message=FALSE, warning=FALSE}
 subset_labl_2020_tuning <- fromJSON(paste0(to_box,"judits_work_keller_lab/fe_si_images/output/process_subset/subset_labl_2020_tuning.json"))
@@ -302,15 +302,11 @@ output_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/combos/output/
 process_image_fragments(image_names, model_version, combos_dir, fragments_dir, output_dir)
 ```
 
-
-
-
-### REDO THIS AS YOU PROCESS BATCHES - OBS MAY WANT TO KEEP OLD PROCESS SINCE USED FOR VALIDATIING COMPONENT MODELS    
 ### Process image fragment for labl_2020_tuning model fe_si_combos_pv2_mv2
 Processes image fragments for labl_2020 tuning image if the results for the corresponding model has been downloaded
 
 #### Issues/Deviations
-Got errors when processing the larger images on PC (lenovo) but not on macbook
+Done on old version of function - keep for documentation
 
 ```{r, message=FALSE, warning=FALSE}
 subset_labl_2020_tuning <- fromJSON(paste0(to_box,"judits_work_keller_lab/fe_si_images/output/process_subset/subset_labl_2020_tuning.json"))
@@ -444,6 +440,7 @@ There are 11 images on image_names that don't have processed ia results - found 
 correspond to partial files
 - only "f8jh" did not run (problems reading in ia_result file) - it worked on a retry
 ```{r}
+
 map_to_fragment_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/merge_model_output/map_to_fragment/output/map_to_fragment/")
 
 ia_results_dir <-paste0(to_box, "judits_work_keller_lab/fe_si_platforms/aiforia/output/ia_results//")
@@ -451,7 +448,7 @@ ia_results_dir <-paste0(to_box, "judits_work_keller_lab/fe_si_platforms/aiforia/
 fragments_dir <- paste0(to_box, "judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/fragments/")
 
 fragments_included_all <- fromJSON(paste0(
-  to_box, "judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/process_reviewed_fragments/fragments_included_all.json"))
+  to_box, "judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/process_reviewed_fragments/fragments_included_all.json")) 
 
 image_fragment_names <- unique(fragments_included_all$image_fragment_name)
 
@@ -473,14 +470,20 @@ not_processed_fragments_included <- fragments_included_all %>%
 image_names <- unique(not_processed_fragments_included$image_name)
 
 #do this on macbook (runs but very slowly on lenovo)
-#arranged_images <- arrange_image_names(image_names, model_version, ia_results_dir)
+arranged_images <- arrange_image_names(image_names, model_version, ia_results_dir)
 
-#write_json(arranged_images, paste0(map_to_fragment_dir, "arranged_images_temp.json"))
+write_json(arranged_images, paste0(map_to_fragment_dir, "arranged_images_temp.json"))
 
-arranged_images <- fromJSON(paste0(map_to_fragment_dir, "arranged_images_temp.json"))
+
 
 #process the rest on lenovo
 process_image_fragments(arranged_images, model_version, ia_results_dir, fragments_dir, map_to_fragment_dir, not_processed_fragments_included)
 ```
 
 
+
+
+
+### Process rois for lymphocyte model testing
+```{r}
+```

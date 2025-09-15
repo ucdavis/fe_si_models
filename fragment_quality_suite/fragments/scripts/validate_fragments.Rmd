@@ -13,12 +13,14 @@ knitr::opts_chunk$set(echo = TRUE)
 
 Assess performance of fragment model. 
 
-### Input
--*reviewed_fragments_labl_2020_tuning.xlsx* (fe_si_models/fragments/output/fragments)
+
+### Assess tuning set
+#### Input
+-*labl_2020_tuning_fragments_reviewed.xlsx* (fe_si_models/fragment_quality_suite/fragments/output/fragments_reviewed/)
 List of fragments manually reviewed. Examples of classes are here:
 https://docs.google.com/presentation/d/1iwTvRggTpLgBiylU861lNOKbjS_VIrJVO9CK5awc4l8/edit?usp=sharing
 
-### Output
+#### Output
 - *single_metrics_labl_2020_tuning.json*
 Performance metrics for detecting single fragments
 - *duplicate_metrics_labl_2020_tuning.json*
@@ -33,7 +35,7 @@ library(readxl)
 library(jsonlite)
 library(tidyverse)
 
-reviewed <- read_xlsx("~/Library/CloudStorage/Box-Box/Projects/fe_si_models/fragments/input/reviewed_fragments_labl_2020_tuning.xlsx")
+reviewed <- read_xlsx("~/Library/CloudStorage/Box-Box/judits_work_keller_lab//fe_si_models/fragment_quality_suite/fragments/output/fragments_reviewed/labl_2020_tuning_fragments_reviewed.xlsx")
 
 output_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/fragments/output/validate_fragments/"
 
@@ -111,3 +113,65 @@ write_json(single_metrics, paste0(output_dir, "single_metrics_labl_2020_tuning.j
 
 ```
 
+
+### Assess full set
+No output files - results printed here
+```{r}
+library(jsonlite)
+library(readxl)
+library(tidyverse)
+
+subset_training <- fromJSON("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_images/output/process_subset/subset_labl_2020_training.json") %>%
+  filter(use_batch_labl_2020 == 1 | use_batch_labl_2020 == 2 | use_batch_labl_2020 == 3)
+subset_tuning <- fromJSON("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_images/output/process_subset/subset_labl_2020_tuning.json")
+subset_test <- fromJSON("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_images/output/process_subset/subset_labl_2020_test.json")
+
+reviewed_fragments_b0 <- read_xlsx("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/fragments_reviewed/grading_sample_fragments_reviewed.xlsx") %>%
+  select(image_name:corrected_classification)
+
+reviewed_fragments_b1 <- read_xlsx("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/fragments_reviewed/batch_1_fragments_reviewed.xlsx") %>%
+  select(image_name:corrected_classification)
+
+reviewed_fragments_b2 <- read_xlsx("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/fragments_reviewed/batch_2_fragments_reviewed.xlsx") %>%
+  select(image_name:corrected_classification)
+
+reviewed_fragments_b3 <- read_xlsx("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/fragments_reviewed/batch_3_fragments_reviewed.xlsx") %>%
+  select(image_name:corrected_classification)
+
+reviewed_fragments_b4 <- read_xlsx("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/fragments_reviewed/batch_4_fragments_reviewed.xlsx") %>%
+  select(image_name:corrected_classification)
+
+reviewed_fragments_b5 <- read_xlsx("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/fragments_reviewed/batch_5_fragments_reviewed.xlsx") %>%
+  select(image_name:corrected_classification)
+
+reviewed_fragments_b6 <- read_xlsx("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/fragments_reviewed/batch_6_fragments_reviewed.xlsx") %>%
+  select(image_name:corrected_classification)
+
+reviewed_fragments_all <- bind_rows(reviewed_fragments_b0, reviewed_fragments_b1, reviewed_fragments_b2, reviewed_fragments_b3, reviewed_fragments_b4, reviewed_fragments_b5, reviewed_fragments_b6) %>%
+  filter(!image_name  %in% subset_training$image_name) %>%
+  filter(!image_name  %in% subset_tuning$image_name) %>%
+  mutate(confusion_class = case_when(
+    (classification == "duplicate_fragment" & is.na(corrected_classification)) ~ "TP",
+    (classification == "duplicate_fragment" & corrected_classification == "original_fragment") ~ "FP",
+    (classification == "original_fragment" & corrected_classification == "duplicate_fragment") ~ "FN",
+    (classification == "original_fragment" & is.na(corrected_classification)) ~ "TN",
+    TRUE ~ NA_character_))
+
+test_images <- unique(reviewed_fragments_all$image_name)
+
+
+confusion_counts <- table(reviewed_fragments_all$confusion_class)
+
+TP <- confusion_counts["TP"]
+TN <- confusion_counts["TN"]
+FP <- confusion_counts["FP"]
+FN <- confusion_counts["FN"]
+
+
+ppv <- TP / (TP + FP)
+se <- TP / (TP + FN)        
+f1_score <- 2 * (ppv * se) / (ppv + se)
+
+print(paste0("PPV is: ", ppv, "\nSe is: ", se, "\nF1 is: ", f1_score))
+
+```

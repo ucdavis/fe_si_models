@@ -11,8 +11,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ## Objective
 This is to process human reviewed model output for the fragment model.
-Fragments is intended to be a "human-in-the-loop" model with incorrect classificaiton
-corrected by a human. 
+Fragments is intended to be a "human-in-the-loop" model with incorrect classifications corrected by a human. 
 
 SOP for reviewing is outline here:
 https://docs.google.com/presentation/d/1YfRRCdEl74Zuk5TyjnUbfgew9tXjFQsAfE5Ay6-rEjA/edit?usp=sharing

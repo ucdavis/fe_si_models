@@ -1,0 +1,523 @@
+---
+title: "mucosa_validation"
+author: "Wulcan"
+date: "2025-07-27"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Objective
+Validate mucosa model aginst majority opinion of three pathologists
+## Input
+<path_initials>_quality.xlsx (input/)
+-mucosa_list_all.json
+### Libraries, directories and functions
+```{r, message=FALSE, warning=FALSE}
+library(readxl)
+library(jsonlite)
+library(tidyverse)
+library(vcd)
+library(caret)
+
+row_mode <- function(x, tie_method = c("min", "max", "random")) {
+  set.seed(123)
+  tie_method <- match.arg(tie_method)
+  x <- na.omit(x)
+  if (length(x) < 2) return(NA)
+  tab <- table(x)
+  modes <- as.numeric(names(tab)[tab == max(tab)])
+  if (length(modes) == 1) {
+    return(modes)
+  } else {
+    if (tie_method == "min") {
+      return(min(modes))
+    } else if (tie_method == "max") {
+      return(max(modes))
+    } else if (tie_method == "random") {
+      return(sample(modes, 1))
+    }
+  }
+}
+
+calculate_agreement <- function(df,
+                             observers,
+                             levels = 0:3,
+                             weight_types = c("Equal-Spacing", "Fleiss-Cohen")) {
+ 
+  #—helper to build summary for a single pair—
+  pair_summary <- function(o1, o2) {
+    # contingency table
+    tab <- xtabs(~ factor(df[[o1]], levels = levels) +
+                   factor(df[[o2]], levels = levels))
+    
+    n   <- sum(tab)
+    p_o <- sum(diag(tab)) / n
+    
+    k   <- Kappa(tab, weight = weight_types)
+    ci  <- confint(k)      # length-4 vector: unweighted low/up, weighted low/up
+    
+    data.frame(
+      path_pair             = paste(o1, "vs", o2),
+      total_n               = n,
+      observed_agreement    = p_o,
+      cohens_kappa          = k$Unweighted[1],
+      cohens_kappa_SE       = k$Unweighted[2],
+      cohens_kappa_MoE      = (ci[3] - ci[1]) / 2,
+      cohens_kappa_CI_lwr   = ci[1],
+      cohens_kappa_CI_upr   = ci[3],
+      cohens_kappa_sd       = k$Unweighted[2] * sqrt(n),
+      weighted_kappa        = k$Weighted[1],
+      weighted_kappa_SE     = k$Weighted[2],
+      weighted_kappa_MoE    = (ci[4] - ci[2]) / 2,
+      weighted_kappa_CI_lwr = ci[2],
+      weighted_kappa_CI_upr = ci[4],
+      weighted_kappa_sd     = k$Weighted[2] * sqrt(n)
+    )
+  }
+  
+  #—all observer pairs—
+  pairs <- combn(observers, 2, simplify = FALSE)
+  
+  #—bind all summaries—
+  agreement_frame <- map_dfr(pairs, ~ pair_summary(.x[1], .x[2])) %>% 
+    select(path_pair, everything())
+  
+  return(agreement_frame)
+}
+
+
+# Helper function
+get_kappa_summary <- function(df, name) {
+  
+  # Determine type
+  if (str_ends(name, "cellularity") | str_ends(name, "size")) {
+    type <- "ordinal"
+    kappa_type <- "weighted_linear"
+    kappa_col <- "weighted_kappa"
+    ag_col <- "observed_agreement"
+  } else {
+    type <- "binary"
+    kappa_type <- "cohens"
+    kappa_col <- "cohens_kappa"
+    ag_col <- "observed_agreement"
+  }
+  
+  # Defensive: handle missing columns gracefully
+  if (!(kappa_col %in% colnames(df))) {
+    median_agreement <- NA
+    iqr_agreement <- NA
+    median_kappa <- NA
+    iqr_kappa <- NA
+  } else {
+    agreement_vals <- df[[ag_col]]
+    kappa_vals <- df[[kappa_col]]
+    median_agreement <- median(agreement_vals, na.rm = TRUE)
+    iqr_agreement <- IQR(agreement_vals, na.rm = TRUE)
+    median_kappa <- median(kappa_vals, na.rm = TRUE)
+    iqr_kappa <- IQR(kappa_vals, na.rm = TRUE)
+  }
+  
+  tibble(
+    variable = name,
+    type = type,
+    median_agreement = median_agreement,
+    iqr_agreement = iqr_agreement,
+    kappa_type = kappa_type,
+    median_kappa = median_kappa,
+    iqr_kappa = iqr_kappa
+  )
+}
+
+
+plot_agreement <- function(df, 
+                           type = c("binary", "ordinal", "size"), 
+                           variable_name = "Variable", 
+                           output_dir = "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_papers/lymphocyte_distribution_patterns_in_feline_small_intestinal_biopsies/output/pathologists_reproducibility/") {
+  # Choose palette and labels based on type
+  type <- match.arg(type)
+  if (type == "binary") {
+    palette <- c("#FDE0C2", "#7F2704")
+    fill_labels <- c("0" = "Absent", "1" = "Present")
+  } else if (type == "ordinal") {
+    palette <- c("#FDE0C2", "#FDBE85", "#FA8533", "#7F2704")
+    fill_labels <- c("0" = "Normal", "1" = "Mild", "2" = "Moderate", "3" = "Marked")
+  } else if (type == "size") {
+    palette <- c("#FDBE85", "#FA8533", "#7F2704")
+    fill_labels <- c("1" = "Small", "2" = "Intermediate", "3" = "Large")
+  }
+  # Compute column sums (excluding first column)
+  column_sums <- colSums(df[, -1], na.rm = TRUE)
+  pathologist_order <- data.frame(variable = names(column_sums), column_sum = column_sums)
+  pathologist_order <- arrange(pathologist_order, column_sum)
+  ordered_pathologists <- pathologist_order$variable
+  
+  # Compute row sums for ordering
+  df$sum <- rowSums(df[, -1], na.rm = TRUE)
+  df <- df %>% arrange(desc(sum))
+  
+  # Long format for plotting
+  df_long <- pivot_longer(df, cols = starts_with("p"), names_to = "Pathologist", values_to = "Grade")
+  df_long$name <- factor(df_long$name, levels = unique(df$name))
+  
+  plot <- ggplot(df_long, 
+                 aes(x = factor(Pathologist, levels = ordered_pathologists), 
+                     y = name, 
+                     fill = factor(Grade))) +
+    geom_tile(color = "black") +
+    scale_fill_manual(values = palette, name = "Grade", labels = fill_labels) +
+    theme_bw() +
+    theme(
+      legend.position = "right", 
+      axis.text = element_text(size = 9, family = "Arial"),
+      axis.title = element_text(size = 9, family = "Arial"),
+      axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+      axis.text.y = element_blank(),
+      axis.ticks.y = element_blank()
+    ) +
+    labs(
+      x = "Pathologist",
+      y = "Mucosal segment",
+      title = variable_name
+    )
+  
+  var <- tolower(variable_name)
+  var <- gsub(" |-", "_", var)
+  
+  ggsave(
+    filename = paste0(output_dir, var, "_agreement_plot.png"),   # change as needed
+    plot     = plot,
+    width    = 7, 
+    height   = 7,     
+    units    = "in",
+    dpi      = 300 ) 
+  
+  return(plot)
+}
+
+```
+
+
+## Agreement & Mode
+```{r}
+mucosa_grade_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/input/"
+output_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/output/mucosa_validation/"
+
+id_map <- 
+c("qv" = "p12",
+  "pe" = "p13", 
+  "aog" = "p14")
+
+files <- list.files(
+  path = mucosa_grade_dir,
+  pattern = "_quality\\.xlsx$",   # any …_grading_sample.xlsx
+  ignore.case = TRUE,                    # be lenient about case
+  full.names = TRUE                      # keep the path if not in wd
+)
+
+get_initials <- function(fname) tolower(str_extract(basename(fname), "^[^_]+"))
+
+grading_list <- set_names(files, get_initials(files)) |>
+  imap(~ {
+    df <- read_excel(.x)
+    initials <- .y
+    deid     <- id_map[initials]
+
+    if (is.na(deid)) {
+      warning(sprintf("No mapping for initials \"%s\" – keeping original ID", initials))
+      deid <- initials       # fallback: keep initials if unmapped
+    }
+
+    df |>
+      select(name:artefact_crypts) %>%
+      mutate(pathologist_id = deid)       # or rename/relocate as you wish
+  }) |>
+  set_names(~ id_map[.])                  # list names == new IDs
+
+long_tbl <- bind_rows(grading_list, .id = "pathologist_id")
+grading_vars <- setdiff(names(long_tbl), c("name", "pathologist_id"))
+
+id_levels <- sprintf("p%02d", 12:14)
+long_tbl  <- long_tbl %>%
+  mutate(pathologist_id = factor(pathologist_id, levels = id_levels))
+
+
+variable_frames <- map(
+  grading_vars,
+  \(var) {
+    long_tbl %>%
+      select(name, pathologist_id, !!sym(var)) %>%
+      pivot_wider(
+        names_from  = pathologist_id,
+        values_from = !!sym(var)
+      ) %>%
+      arrange(name)
+  }
+) |>
+  set_names(grading_vars)   # list names = sheet names
+
+id_cols <- sprintf("p%02d", 12:14)   
+
+variable_frames <- map(variable_frames, \(df) {
+  df %>%
+    select(name, any_of(id_cols))     # keeps only the IDs that exist,
+                                      # in the specified order
+})
+
+value_map <- c(
+  absent        = 0,
+  adequate         = 1, present       = 1, 
+  marginal     = 2, 
+  inadequate       = 3, 
+  nonassessable = NA_real_         )
+
+variable_frames_num <- map(variable_frames, \(df) {
+  df %>%
+    mutate(across(
+      -name,                                      
+      ~ value_map[str_trim(tolower(as.character(.x)))]
+    ))
+})
+
+majority_grades_mode <- map_dfc(variable_frames_num, ~{
+  df <- .
+  df %>%
+    mutate(mode_grade = apply(select(., starts_with("p")), 1, row_mode, tie_method = "min")) %>%
+    select(name, mode_grade)
+}) %>%
+  {
+    result <- .
+    names_col <- result %>% select(starts_with("name")) %>% pull(1)
+    grade_cols <- result %>% select(contains("mode_grade"))
+    colnames(grade_cols) <- names(variable_frames_num)
+    cbind(name = names_col, grade_cols)
+  }
+
+write_json(majority_grades_mode, paste0(output_dir, "majority_grades.json"), pretty = TRUE)
+
+grades_summary <- majority_grades_mode %>%
+  pivot_longer(-name, names_to = "variable", values_to = "grade") %>%
+  group_by(variable) %>%
+  summarise(
+    pct_0   = mean(grade == 0, na.rm = TRUE),
+    pct_1   = mean(grade == 1, na.rm = TRUE),
+    pct_2   = mean(grade == 2, na.rm = TRUE),
+    pct_3   = mean(grade == 3, na.rm = TRUE)) %>%
+  ungroup()
+
+grades_summary <- grades_summary %>%
+  rowwise() %>%
+  mutate(
+    min_max_ratio = {
+      vals <- c_across(starts_with("pct"))
+      # Exclude zeros
+      vals_nonzero <- vals[vals != 0]
+      if(length(vals_nonzero) == 0) {
+        NA_real_
+      } else {
+        min(vals_nonzero, na.rm = TRUE) / max(vals_nonzero, na.rm = TRUE)
+      }
+    }
+  ) %>%
+  ungroup() %>%
+  mutate(pct_0 = ifelse(pct_0 == 0, NA_real_, pct_0),
+         pct_1 = ifelse(pct_1 == 0, NA_real_, pct_1),
+         pct_2 = ifelse(pct_2 == 0, NA_real_ , pct_2),
+         pct_3 = ifelse(pct_3 == 0, NA_real_, pct_3)
+         )
+
+variables <- names(variable_frames_num)
+
+agreement_frames <- imap(          # i = element value (df), .y = element name (var)
+  variable_frames_num,
+  ~{
+    observers <- names(.x)[-1]
+    calculate_agreement(.x, observers)
+  }
+)
+
+kappa_summary <- map2_dfr(agreement_frames, names(agreement_frames), get_kappa_summary)
+
+
+
+
+kappa_summary <- grades_summary %>% left_join(kappa_summary) %>%
+  mutate(kappa_type = ifelse(min_max_ratio <0.2, NA_real_, kappa_type),
+         median_kappa = ifelse(min_max_ratio <0.2, NA_real_, median_kappa),
+         iqr_kappa = ifelse(min_max_ratio <0.2, NA_real_, iqr_kappa)
+         )
+
+kappa_summary_for_pub <- kappa_summary %>%
+  mutate(variable = case_when(
+    variable == "artefact_crypts" ~ "Artefact\ncrypts",
+    variable == "artefact_villi" ~ "Artefact\nvilli",
+    variable == "orientation" ~ "Orientation",
+    variable == "small_intestinal_mucosa"  ~"Small intestinal mucosa",
+    TRUE ~ variable)) %>%
+  rename(`Graded quality feature` = variable,
+         `0 (%)` = pct_0,
+         `1 (%)` = pct_1,
+         `2 (%)` = pct_2,
+         `3 (%)` = pct_3,
+         `Min-max ratio` = min_max_ratio,
+         `Variable type` = type,
+         `Kappa (type)` = kappa_type) %>%
+   mutate(across(where(is.numeric), ~ round(.x, 3))) %>%
+  mutate(`Kappa (median, IQR)` = paste0(median_kappa, " (", 
+                                        median_kappa - (iqr_kappa/2), "-",
+                                        median_kappa + (iqr_kappa/2), ")"),
+         `Kappa (median, IQR)`= ifelse(`Kappa (median, IQR)` == "NA (NA-NA)", NA_real_, `Kappa (median, IQR)`),
+         `Agreement (median, IQR)` = paste0(median_agreement, " (", 
+                                            median_agreement - (iqr_agreement/2), "-",
+                                            median_agreement + (iqr_agreement/2), ")"),
+         across(ends_with("(%)"), ~ round(.x * 100, 1))) %>%
+  select(`Graded quality feature`, 
+         `0 (%)`, 
+         `1 (%)`,
+         `2 (%)`,
+         `3 (%)`,
+         `Min-max ratio`,
+         `Agreement (median, IQR)`,
+         `Kappa (median, IQR)`
+         )  %>%
+  arrange(desc(`Graded quality feature`))
+         
+         
+write_xlsx(kappa_summary_for_pub, paste0(output_dir, "agreement_summary_table.xlsx"))
+```
+
+## Validation
+```{r}
+
+mucosa_grade_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/input/"
+output_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/output/mucosa_validation/"
+
+majority_grades <- fromJSON(paste0(output_dir, "majority_grades.json")) %>%
+  mutate(artefact = case_when(artefact_villi == 3 | artefact_crypts == 3 ~ 3,
+                              artefact_villi == 2 | artefact_crypts == 2 ~ 2,
+                              artefact_villi == 1 | artefact_crypts == 1 ~ 1,
+                              TRUE ~ NA_real_
+                              )) %>%
+  select(name, small_intestinal_mucosa, orientation, artefact)
+ai <- fromJSON("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/output/mucosa/mucosa_list_all.json") %>% 
+  filter(name %in% majority_grades$name) %>% 
+  mutate(
+    small_intestinal_mucosa = case_when(
+      classification == "no_mucosa" ~ 0,
+      TRUE ~ 1),
+    orientation = case_when(orientation_class == "adequate" ~ 1,
+                            orientation_class == "marginal" ~ 2,
+                            orientation_class == "inadequate" ~ 3,
+                            TRUE ~ NA_real_),
+    artefact = case_when(artefact_class == "adequate" ~ 1,
+                         artefact_class == "marginal" ~ 2,
+                         artefact_class == "inadequate" ~ 3)) %>%
+  select(name, small_intestinal_mucosa, orientation, artefact)
+
+
+
+
+library(dplyr)
+library(purrr)
+library(tibble)
+
+# 1. Join dataframes by 'name'
+comparison_df <- majority_grades %>%
+  rename_with(~ paste0(.x, "_ref"), -name) %>%
+  inner_join(ai %>% rename_with(~ paste0(.x, "_ai"), -name), by = "name")
+
+# 2. Variables to assess
+vars <- c("small_intestinal_mucosa", "orientation", "artefact")
+
+# 3. Metric calculation function
+compute_metrics <- function(var) {
+  ref <- comparison_df[[paste0(var, "_ref")]]
+  pred <- comparison_df[[paste0(var, "_ai")]]
+
+  # Drop any rows where either is NA
+  valid_idx <- !(is.na(ref) | is.na(pred))
+  ref <- ref[valid_idx]
+  pred <- pred[valid_idx]
+
+  # Skip if nothing to compare
+  if (length(ref) == 0) return(NULL)
+
+  # Get all unique levels across both
+  levels_all <- sort(union(unique(ref), unique(pred)))
+  ref <- factor(ref, levels = levels_all)
+  pred <- factor(pred, levels = levels_all)
+
+  map_dfr(levels_all, function(lvl) {
+    TP <- sum(ref == lvl & pred == lvl, na.rm = TRUE)
+    FP <- sum(ref != lvl & pred == lvl, na.rm = TRUE)
+    FN <- sum(ref == lvl & pred != lvl, na.rm = TRUE)
+
+    sensitivity <- if ((TP + FN) > 0) TP / (TP + FN) else NA_real_
+    ppv         <- if ((TP + FP) > 0) TP / (TP + FP) else NA_real_
+    f1          <- if (!is.na(sensitivity) && !is.na(ppv) && (sensitivity + ppv) > 0) {
+      2 * sensitivity * ppv / (sensitivity + ppv)
+    } else {
+      NA_real_
+    }
+
+    tibble(
+      variable = var,
+      class = lvl,
+      sensitivity = round(sensitivity, 3),
+      ppv = round(ppv, 3),
+      f1_score = round(f1, 3)
+    )
+  })
+}
+
+# 4. Run for all variables
+all_metrics <- map_dfr(vars, compute_metrics)
+
+# 5. View results
+print(all_metrics)
+
+write_json(comparison_df, paste0(output_dir, "mucosa_ai_and_ref.json"), pretty = TRUE)
+write_json(all_metrics, paste0(output_dir, "mucosa_validation_metrics.json"), pretty = TRUE)
+```
+
+### Calculate metrics specifically for detecting segments eligble for inclusion 
+(small intestinal mucosa - not inadeqauate orientaiton or artefact)
+```{r}
+template <- comparison_df %>%
+  mutate(tp = case_when(
+    small_intestinal_mucosa_ref == 1 & orientation_ref != 3 & artefact_ref != 3 &
+    small_intestinal_mucosa_ai == 1 & orientation_ai != 3 & artefact_ai != 3 ~ TRUE,
+    TRUE ~ FALSE),
+    fp = case_when(
+      (small_intestinal_mucosa_ref == 0  | orientation_ref == 3 | artefact_ref == 3) &
+        small_intestinal_mucosa_ai == 1 & orientation_ai != 3 & artefact_ai != 3 ~ TRUE,
+      TRUE ~ FALSE),
+    tn = case_when(
+      (small_intestinal_mucosa_ref == 0 | orientation_ref == 3 |  artefact_ref == 3) &
+        (small_intestinal_mucosa_ai == 0 | orientation_ai == 3 | artefact_ai == 3) ~ TRUE,
+      TRUE ~ FALSE),
+    fn = case_when(
+      (small_intestinal_mucosa_ref == 1 & orientation_ref != 3 & artefact_ref != 3) &
+        (small_intestinal_mucosa_ai == 0 | orientation_ai == 3 | artefact_ai == 3) ~ TRUE,
+      TRUE ~ FALSE))
+
+summary_df <- template %>%
+  summarise(
+    tp = sum(tp),
+    fp = sum(fp),
+    tn = sum(tn),
+    fn = sum(fn)
+  ) %>%
+  mutate(
+    sensitivity = tp / (tp + fn),
+    ppv = tp / (tp + fp),
+    f1 = 2 * ppv * sensitivity / (ppv + sensitivity)
+  )
+
+write_xlxs(template, "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_papers/lymphocyte_distribution_patterns_in_feline_small_intestinal_biopsies/output/")
+```
+        
+        
+      
