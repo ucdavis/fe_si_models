@@ -45,7 +45,7 @@ For all processed fragments
 
 
 ## Issues/Deviations/Comments/2 Do
-
+In one out of all processed image_fragments (u42o_07) this script fails because the intersection between the crypts and the total compartments becomes a linestring only (no polygon). This fragment was already classified as inadequate - instead of rewriting the script to handle this, I will let this be lost and manually update the flow of cases (fe_si_papers/unsupervised_clustering../scripts/flow_of_cases) to document
 
 ```{r, message=FALSE, warning=FALSE}
 library(tidyverse)
@@ -55,8 +55,8 @@ library(writexl)
 library(readxl)
 Sys.setenv(OGR_GEOJSON_MAX_OBJ_SIZE = "0") #Allows processing of large files
 
-#to_box <- "~/Library/CloudStorage/Box-Box/"
-to_box <- "C:/Users/15303/Box/"
+to_box <- "~/Library/CloudStorage/Box-Box/"
+#to_box <- "C:/Users/15303/Box/"
 
 read_sf_retry <- function(path, retries = 3, wait = 5) {
   attempt <- 1
@@ -874,6 +874,39 @@ write_json(mucosa_metadata_subset, "C:/Users/15303/Box/judits_work_keller_lab/fe
 
 # Bound together with old
 write_json(mucosa_list_all, "C:/Users/15303/Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/output/mucosa/mucosa_metadata_all_with_additional.json", pretty = TRUE)
+```
+
+
+#### Process missing fragment
+One fragment u42o_07 was not processed (error with linestring produced with intersection)
+This was already processed as inadequate orientation before the error and would also have been inadequate for artefact - added manually (insted of updating function) because very rare error discovered after everything else was processed. 
+
+```{r, message=FALSE, warning=FALSE}
+library(jsonlite)
+library(tidyverse)
+
+
+mucosa_list  <- fromJSON(paste0(to_box, "/judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/output/mucosa/mucosa_metadata_all_with_additional.json")) %>%
+  distinct()
+
+included_fragments <- fromJSON(paste0(
+  to_box, "judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/process_reviewed_fragments/fragments_included_all.json")) %>%
+  distinct() %>%
+  filter(!image_fragment_name %in% mucosa_list$image_fragment_name)
+
+manual_row <- included_fragments %>%
+  select(image_name, fragment_name, image_fragment_name) %>%
+  mutate(mucosa_name = "00",
+         name = paste(image_fragment_name, mucosa_name, sep = "_"),
+         classification = "mucosa_orientation_inadequate_artefact_inadequate",
+         orientation_class = "inadequate",
+         artefact_class = "inadequate") 
+
+mucosa_list_amended <- bind_rows(mucosa_list, manual_row)
+
+
+# Bound together with old
+write_json(mucosa_list_amended, "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/output/mucosa/mucosa_metadata_all_with_additional.json", pretty = TRUE)
 ```
 
 #### Process subset_labl_2020_tuning (historic)
