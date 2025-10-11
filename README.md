@@ -7,6 +7,7 @@ training, tuning and testing strategies and case material used for development
 and testing.
 
 ![Schematic](assets/fe_si_models.png)
+![Schematic](assets/model_overview.png)
 
 ### Fragment-quality suite
 - **tissues** (classic ML, qupath, input for fragments)
