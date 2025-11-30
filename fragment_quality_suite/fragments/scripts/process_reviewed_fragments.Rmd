@@ -32,8 +32,8 @@ library(readxl)
 library(jsonlite)
 library(tidyverse)
 
-#to_box <- "~/Library/CloudStorage/Box-Box/"
-to_box <- "C:/Users/15303/Box/" #JMW lenovo
+to_box <- "~/Library/CloudStorage/Box-Box/"
+#to_box <- "C:/Users/15303/Box/" #JMW lenovo
 
 process_reviewed_fragments <- function(subset_name, output_dir, fragments_reviewed) {
 
@@ -69,9 +69,9 @@ process_reviewed_fragments <- function(subset_name, output_dir, fragments_review
 ```{r}
 subset_name <- "grading_sample"
 
-output_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragments/output/process_reviewed_fragments/"
+output_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/process_reviewed_fragments/"
 
-fragments_reviewed <- read_xlsx(paste0("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragments/output/fragments_reviewed/", subset_name, "_fragments_reviewed.xlsx"))
+fragments_reviewed <- read_xlsx(paste0("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/fragments_reviewed/", subset_name, "_fragments_reviewed.xlsx"))
 
 processed <- process_reviewed_fragments(subset_name, output_dir, fragments_reviewed)
 
@@ -167,7 +167,7 @@ processed <- process_reviewed_fragments(subset_name, output_dir, fragments_revie
 ```{r}
 batches <- c("grading_sample", "batch_1", "batch_2", "batch_3", "batch_4", "batch_5", "batch_6")
 
-output_dir <- paste0(to_box,"judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/process_reviewed_fragments/")
+output_dir <- paste0("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/process_reviewed_fragments/")
 
 fragments_included_all <- NULL
 fragments_excluded_all <- NULL
@@ -183,7 +183,7 @@ for (b in batches){
 }
 
 
-fragments_included_all <- fragments_included_all 
+
 
 write_json(fragments_included_all, paste0(output_dir, "fragments_included_all.json"), pretty = TRUE)
 write_json(fragments_excluded_all, paste0(output_dir, "fragments_excluded_all.json"), pretty = TRUE)
