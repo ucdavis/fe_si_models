@@ -168,10 +168,26 @@ FP <- confusion_counts["FP"]
 FN <- confusion_counts["FN"]
 
 
-ppv <- TP / (TP + FP)
-se <- TP / (TP + FN)        
-f1_score <- 2 * (ppv * se) / (ppv + se)
+ppv <- if ((TP + FP) > 0) TP / (TP + FP) else NA_real_
+se  <- if ((TP + FN) > 0) TP / (TP + FN) else NA_real_
+sp  <- if ((TN + FP) > 0) TN / (TN + FP) else NA_real_
+npv <- if ((TN + FN) > 0) TN / (TN + FN) else NA_real_
+balanced_accuracy <- if (!is.na(se) && !is.na(sp)) (se + sp) / 2 else NA_real_
+f1_score <- if (!is.na(ppv) && !is.na(se) && (ppv + se) > 0) {
+  2 * (ppv * se) / (ppv + se)
+} else {
+  NA_real_
+}
 
-print(paste0("PPV is: ", ppv, "\nSe is: ", se, "\nF1 is: ", f1_score))
+print(
+  paste0(
+    "PPV is: ", ppv,
+    "\nSe is: ", se,
+    "\nSp is: ", sp,
+    "\nNPV is: ", npv,
+    "\nBalanced accuracy is: ", balanced_accuracy,
+    "\nF1 is: ", f1_score
+  )
+)
 
 ```

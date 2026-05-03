@@ -453,10 +453,20 @@ compute_metrics <- function(var) {
     TP <- sum(ref == lvl & pred == lvl, na.rm = TRUE)
     FP <- sum(ref != lvl & pred == lvl, na.rm = TRUE)
     FN <- sum(ref == lvl & pred != lvl, na.rm = TRUE)
+    TN <- sum(ref != lvl & pred != lvl, na.rm = TRUE)
 
     sensitivity <- if ((TP + FN) > 0) TP / (TP + FN) else NA_real_
+    specificity <- if ((TN + FP) > 0) TN / (TN + FP) else NA_real_
     ppv         <- if ((TP + FP) > 0) TP / (TP + FP) else NA_real_
-    f1          <- if (!is.na(sensitivity) && !is.na(ppv) && (sensitivity + ppv) > 0) {
+    npv         <- if ((TN + FN) > 0) TN / (TN + FN) else NA_real_
+    accuracy    <- if ((TP + TN + FP + FN) > 0) (TP + TN) / (TP + TN + FP + FN) else NA_real_
+    balanced_accuracy <- if (!is.na(sensitivity) && !is.na(specificity)) {
+      (sensitivity + specificity) / 2
+    } else {
+      NA_real_
+    }
+
+    f1 <- if (!is.na(sensitivity) && !is.na(ppv) && (sensitivity + ppv) > 0) {
       2 * sensitivity * ppv / (sensitivity + ppv)
     } else {
       NA_real_
@@ -466,7 +476,11 @@ compute_metrics <- function(var) {
       variable = var,
       class = lvl,
       sensitivity = round(sensitivity, 3),
+      specificity = round(specificity, 3),
       ppv = round(ppv, 3),
+      npv = round(npv, 3),
+      accuracy = round(accuracy, 3),
+      balanced_accuracy = round(balanced_accuracy, 3),
       f1_score = round(f1, 3)
     )
   })
@@ -478,7 +492,7 @@ all_metrics <- map_dfr(vars, compute_metrics)
 # 5. View results
 print(all_metrics)
 
-write_json(comparison_df, paste0(output_dir, "mucosa_ai_and_ref.json"), pretty = TRUE)
+#write_json(comparison_df, paste0(output_dir, "mucosa_ai_and_ref.json"), pretty = TRUE)
 write_json(all_metrics, paste0(output_dir, "mucosa_validation_metrics.json"), pretty = TRUE)
 ```
 
@@ -516,7 +530,7 @@ summary_df <- template %>%
     f1 = 2 * ppv * sensitivity / (ppv + sensitivity)
   )
 
-write_xlxs(template, "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_papers/lymphocyte_distribution_patterns_in_feline_small_intestinal_biopsies/output/")
+#write_xlxs(template, "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_papers/lymphocyte_distribution_patterns_in_feline_small_intestinal_biopsies/output/")
 ```
         
         
