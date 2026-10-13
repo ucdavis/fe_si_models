@@ -10,7 +10,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ## Objective 
-Validate tissue compartments
+Validate compartments
 
 ## Issues / Deviations
 Have made minor changes to figures but not rerun to save 
@@ -401,109 +401,143 @@ explore_ai_confidence <- function(sf_val, confidence_palette) {
   return(list(summary = df_plot, plot = p))  # Properly return the plot object
 }
 
-#Function to compute performance across different confidence thresholds
 compute_class_metrics_thresholds <- function(sf, cls, thresholds, palette) {
+
   library(dplyr)
-  library(sf)
   library(ggplot2)
-  
- 
-  
-  # A helper function to compute area.
-  safe_area <- function(geom) {
-    if (length(geom) == 0 || all(st_is_empty(geom))) {
-      return(0)
-    } else {
-      return(as.numeric(st_area(geom)))
-    }
+
+  # Union geometries, handling empty subsets
+  safe_union <- function(x) {
+    if (nrow(x) == 0) return(NULL)
+    sf::st_union(sf::st_geometry(x))
   }
-  
-  # Iterate through each threshold and compute metrics.
-  results <- lapply(thresholds, function(th) {
-    # Ground truth (annotation) for this class.
-    gt <- sf %>%
-      filter(source == "annotation", classification == cls) %>%
-      st_union()
-    
-    # Predictions (ai) for this class with the current threshold filter.
-    pred <- sf %>%
-      filter(source == "ai",
-             classification == cls,
-             confidence_percentage >= th) %>%
-      st_union()
-    
-    # ROI geometry comes from the annotation row with classification "roi".
-    roi <- sf %>%
+
+  # Calculate area, handling empty geometries
+  safe_area <- function(g) {
+    if (is.null(g) || length(g) == 0 ||
+        all(sf::st_is_empty(g))) return(0)
+
+    sum(as.numeric(sf::st_area(g)))
+  }
+
+  # Calculate overlap area
+  overlap_area <- function(a, b) {
+    if (is.null(a) || is.null(b)) return(0)
+    safe_area(sf::st_intersection(a, b))
+  }
+
+  # Calculate areas separately for each image
+  process_image <- function(img_sf) {
+
+    roi <- img_sf %>%
       filter(source == "annotation", classification == "roi") %>%
-      st_union()
-    
-    # Compute intersection (TP) and differences (FN and FP).
-    TP_geom <- st_intersection(gt, pred)
-    FN_geom <- st_difference(gt, pred)
-    FP_geom <- st_difference(pred, gt)
-    
-    # TN: within the ROI, the area that is neither in gt nor in pred.
-    union_gt_pred <- st_union(gt, pred)
-    TN_geom <- st_difference(roi, union_gt_pred)
-    
-    # Compute areas.
-    TP <- safe_area(TP_geom)
-    FP <- safe_area(FP_geom)
-    FN <- safe_area(FN_geom)
-    TN <- safe_area(TN_geom)
-    
-    # Create a tibble of metrics including the current threshold.
-    metrics <- tibble(
-      threshold = th,
-      TP = TP,
-      FP = FP,
-      FN = FN,
-      TN = TN
+      safe_union()
+
+    if (is.null(roi)) stop("Missing ROI for an image")
+
+    gt <- img_sf %>%
+      filter(source == "annotation", classification == cls) %>%
+      safe_union()
+
+    if (!is.null(gt)) {
+      gt <- sf::st_intersection(gt, roi)
+    }
+
+    roi_area <- safe_area(roi)
+    gt_area <- safe_area(gt)
+
+    # Calculate performance at each threshold
+    bind_rows(lapply(thresholds, function(th) {
+
+      pred <- img_sf %>%
+        filter(
+          source == "ai",
+          classification == cls,
+          confidence_percentage >= th
+        ) %>%
+        safe_union()
+
+      if (!is.null(pred)) {
+        pred <- sf::st_intersection(pred, roi)
+      }
+
+      pred_area <- safe_area(pred)
+
+      TP <- overlap_area(gt, pred)
+      FP <- max(0, pred_area - TP)
+      FN <- max(0, gt_area - TP)
+      TN <- max(0, roi_area - TP - FP - FN)
+
+      tibble(
+        threshold = th,
+        TP = TP,
+        FP = FP,
+        FN = FN,
+        TN = TN
+      )
+    }))
+  }
+
+  # Process each image independently
+  results <- split(sf, sf$image_name) %>%
+    lapply(process_image) %>%
+    bind_rows()
+
+  # Sum areas across images and calculate metrics
+  results_df <- results %>%
+    group_by(threshold) %>%
+    summarise(
+      across(c(TP, FP, FN, TN), sum),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      sensitivity = ifelse(TP + FN > 0,
+                           round(100 * TP / (TP + FN), 1), NA_real_),
+
+      specificity = ifelse(TN + FP > 0,
+                           round(100 * TN / (TN + FP), 1), NA_real_),
+
+      ppv = ifelse(TP + FP > 0,
+                   round(100 * TP / (TP + FP), 1), NA_real_),
+
+      npv = ifelse(TN + FN > 0,
+                   round(100 * TN / (TN + FN), 1), NA_real_),
+
+      accuracy = ifelse(TP + TN + FP + FN > 0,
+                        round(100 * (TP + TN) /
+                              (TP + TN + FP + FN), 1), NA_real_),
+
+      f1_score = ifelse(ppv + sensitivity > 0,
+                        round(2 * ppv * sensitivity /
+                              (ppv + sensitivity), 1), NA_real_),
+
+      balanced_accuracy = ifelse(
+        !is.na(sensitivity) & !is.na(specificity),
+        round((sensitivity + specificity) / 2, 1),
+        NA_real_
+      ),
+
+      fpr = 100 - specificity
     )
-    
-    # Compute additional metrics, protecting against division by zero.
-    metrics <- metrics %>%
-      mutate(
-        sensitivity       = ifelse((TP + FN) > 0, round(100 * TP / (TP + FN), 1), NA_real_),
-        specificity       = ifelse((TN + FP) > 0, round(100 * TN / (TN + FP), 1), NA_real_),
-        ppv               = ifelse((TP + FP) > 0, round(100 * TP / (TP + FP), 1), NA_real_),
-        npv               = ifelse((TN + FN) > 0, round(100 * TN / (TN + FN), 1), NA_real_),
-        accuracy          = ifelse((TP + TN + FP + FN) > 0, round(100 * (TP + TN) / (TP + TN + FP + FN), 1), NA_real_),
-        f1_score          = ifelse((ppv + sensitivity) > 0,
-                               round(100 * (2 * (ppv / 100 * sensitivity / 100)) / ((ppv / 100) + (sensitivity / 100)), 1),
-                               NA_real_),
-        balanced_accuracy = ifelse(!is.na(sensitivity) & !is.na(specificity),
-                               round((sensitivity + specificity) / 2, 1),
-                               NA_real_)
-  )
-    
-    return(metrics)
-  })
-  
-  # Combine all results into one tibble.
-  results_df <- bind_rows(results)
-  
-  # Calculate the False Positive Rate (FPR).
-  results_df <- results_df %>% mutate(fpr = 100 - specificity)
-  
-  # For plotting, only include rows with non-missing sensitivity and specificity.
-  plot_data <- results_df %>% filter(!is.na(sensitivity) & !is.na(specificity))
-  
-  # Create the plot.
-  p <- ggplot(plot_data, aes(x = fpr, y = sensitivity, color = factor(threshold))) +
-    geom_jitter(size = 4, width = 1, height = 1) +  # Jitter points to reduce overplotting
-    scale_color_manual(values = palette) +          # Custom color palette
-    scale_x_continuous(limits = c(0, 100), expand = c(0, 0)) +  # Force x-axis 0–100
-    scale_y_continuous(limits = c(0, 100), expand = c(0, 0)) +  # Force y-axis 0–100
-    labs(x = "100 - Specificity",
-       y = "Sensitivity",
-       color = "AI confidence threshold (%)",
-       title = cls) +
+
+  # Original plotting approach
+  p <- ggplot(
+    results_df,
+    aes(x = fpr, y = sensitivity, color = factor(threshold))
+  ) +
+    geom_jitter(size = 4, width = 1, height = 1) +
+    scale_color_manual(values = palette) +
+    scale_x_continuous(limits = c(0, 100), expand = c(0, 0)) +
+    scale_y_continuous(limits = c(0, 100), expand = c(0, 0)) +
+    labs(
+      x = "100 - Specificity",
+      y = "Sensitivity",
+      color = "AI confidence threshold (%)",
+      title = cls
+    ) +
     theme_bw(base_family = "Arial") +
     theme(text = element_text(size = 9, family = "Arial"))
 
-  
-  # Return both the metrics table and the plot.
   return(list(metrics = results_df, plot = p))
 }
 
@@ -793,7 +827,9 @@ ai_output_dir <-  "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_p
 annotation_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab//fe_si_models/histology_component_suite/compartments//output/aiforia_annotations/"
 
 output_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab//fe_si_models/histology_component_suite/compartments//output/validate_compartments//"
+```
 
+```{r}
 #choose images (filter on images that has both annotations and ai output)
 
 subset_labl_2020_test<- fromJSON("~/Library/CloudStorage/Box-Box/judits_work_keller_lab//fe_si_images/output/process_subset/subset_labl_2020_test.json") %>%
@@ -838,11 +874,32 @@ for (img in image_names){
   processed_all <- rbind(processed_all, processed_by_roi_normalized)
 }
 
-st_write(processed_all, paste0(output_dir, model_version, "_", image_subset,"_processed_normalized.geojson"), quiet = TRUE, delete_dsn = TRUE)
+processed_path <-  paste0(output_dir, model_version, "_", image_subset,"_processed_normalized.geojson")
+
+st_write(processed_all, processed_path, quiet = TRUE, delete_dsn = TRUE)
+
+```
+
+
+```{r}
+processed_path <-  paste0(output_dir, model_version, "_", image_subset,"_processed_normalized.geojson")
+
+table_s3 <- readxl::read_xlsx("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_papers/unsupervised_clustering_fe_si_bx/output/parse_path_report/wsi_info_table_s3_2026-10-10.xlsx")
+
+#remove patient level overlap wsi
+model_test <- table_s3 %>% 
+  filter(model_test_set)
+
+processed_all <- st_read(processed_path) %>%
+    st_set_crs(0) %>% 
+  filter(image_name %in% model_test$image_name)
 
 areas <- processed_all %>%
   group_by(source, classification) %>%
-  summarise(area_mm2 = sum(area_mm2))
+  summarise(
+    area_mm2 = sum(area_mm2, na.rm = TRUE),
+    .groups = "drop"
+  )
 ```
 
 
@@ -922,7 +979,10 @@ png_file_path <- paste0(output_dir, model_version, "_", image_subset,"_explored_
 png(png_file_path, width = 3.5, height = 3.5, units = "in", res = 300) 
 print(explored_confidence$plot)
 dev.off()
+```
 
+
+```{r}
 
 thresholds <- c(40, 50, 60, 70, 80, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100)
 threshold_palette <- c("100" = "#7F2704",

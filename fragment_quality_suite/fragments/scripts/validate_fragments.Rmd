@@ -40,6 +40,7 @@ reviewed <- read_xlsx("~/Library/CloudStorage/Box-Box/judits_work_keller_lab//fe
 output_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/fragments/output/validate_fragments/"
 
 
+
 #Calculate metrics for duplicate identification
 
 reviewed_duplicate <- reviewed %>%
@@ -121,10 +122,10 @@ library(jsonlite)
 library(readxl)
 library(tidyverse)
 
-subset_training <- fromJSON("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_images/output/process_subset/subset_labl_2020_training.json") %>%
-  filter(use_batch_labl_2020 == 1 | use_batch_labl_2020 == 2 | use_batch_labl_2020 == 3)
-subset_tuning <- fromJSON("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_images/output/process_subset/subset_labl_2020_tuning.json")
-subset_test <- fromJSON("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_images/output/process_subset/subset_labl_2020_test.json")
+#subset_training <- fromJSON("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_images/output/process_subset/subset_labl_2020_training.json") %>%
+#  filter(use_batch_labl_2020 == 1 | use_batch_labl_2020 == 2 | use_batch_labl_2020 == 3)
+#subset_tuning <- fromJSON("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_images/output/process_subset/subset_labl_2020_tuning.json")
+#subset_test <- fromJSON("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_images/output/process_subset/subset_labl_2020_test.json")
 
 reviewed_fragments_b0 <- read_xlsx("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/fragments/output/fragments_reviewed/grading_sample_fragments_reviewed.xlsx") %>%
   select(image_name:corrected_classification)
@@ -148,8 +149,6 @@ reviewed_fragments_b6 <- read_xlsx("~/Library/CloudStorage/Box-Box/judits_work_k
   select(image_name:corrected_classification)
 
 reviewed_fragments_all <- bind_rows(reviewed_fragments_b0, reviewed_fragments_b1, reviewed_fragments_b2, reviewed_fragments_b3, reviewed_fragments_b4, reviewed_fragments_b5, reviewed_fragments_b6) %>%
-  filter(!image_name  %in% subset_training$image_name) %>%
-  filter(!image_name  %in% subset_tuning$image_name) %>%
   mutate(confusion_class = case_when(
     (classification == "duplicate_fragment" & is.na(corrected_classification)) ~ "TP",
     (classification == "duplicate_fragment" & corrected_classification == "original_fragment") ~ "FP",
@@ -159,12 +158,18 @@ reviewed_fragments_all <- bind_rows(reviewed_fragments_b0, reviewed_fragments_b1
 
 test_images <- unique(reviewed_fragments_all$image_name)
 
+table_s3 <- readxl::read_xlsx("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_papers/unsupervised_clustering_fe_si_bx/output/parse_path_report/wsi_info_table_s3_2026-10-10.xlsx")
+
+model_test_set <- table_s3 %>% filter(model_test_set)
+
+reviewed_fragments_all <- reviewed_fragments_all %>% filter(image_name %in% model_test_set$image_name)
+
 
 confusion_counts <- table(reviewed_fragments_all$confusion_class)
 
 TP <- confusion_counts["TP"]
 TN <- confusion_counts["TN"]
-FP <- confusion_counts["FP"]
+FP <- if ("FP" %in% names(confusion_counts)) confusion_counts["FP"] else 0
 FN <- confusion_counts["FN"]
 
 

@@ -310,109 +310,143 @@ explore_ai_confidence <- function(sf_val, confidence_palette) {
   return(list(summary = df_plot, plot = p))  # Properly return the plot object
 }
 
-#Function to compute performance across different confidence thresholds
 compute_class_metrics_thresholds <- function(sf, cls, thresholds, palette) {
+
   library(dplyr)
-  library(sf)
   library(ggplot2)
-  
- 
-  
-  # A helper function to compute area.
-  safe_area <- function(geom) {
-    if (length(geom) == 0 || all(st_is_empty(geom))) {
-      return(0)
-    } else {
-      return(as.numeric(st_area(geom)))
-    }
+
+  # Union geometries, handling empty subsets
+  safe_union <- function(x) {
+    if (nrow(x) == 0) return(NULL)
+    sf::st_union(sf::st_geometry(x))
   }
-  
-  # Iterate through each threshold and compute metrics.
-  results <- lapply(thresholds, function(th) {
-    # Ground truth (annotation) for this class.
-    gt <- sf %>%
-      filter(source == "annotation", classification == cls) %>%
-      st_union()
-    
-    # Predictions (ai) for this class with the current threshold filter.
-    pred <- sf %>%
-      filter(source == "ai",
-             classification == cls,
-             confidence_percentage >= th) %>%
-      st_union()
-    
-    # ROI geometry comes from the annotation row with classification "roi".
-    roi <- sf %>%
+
+  # Calculate area, handling empty geometries
+  safe_area <- function(g) {
+    if (is.null(g) || length(g) == 0 ||
+        all(sf::st_is_empty(g))) return(0)
+
+    sum(as.numeric(sf::st_area(g)))
+  }
+
+  # Calculate overlap area
+  overlap_area <- function(a, b) {
+    if (is.null(a) || is.null(b)) return(0)
+    safe_area(sf::st_intersection(a, b))
+  }
+
+  # Calculate areas separately for each image
+  process_image <- function(img_sf) {
+
+    roi <- img_sf %>%
       filter(source == "annotation", classification == "roi") %>%
-      st_union()
-    
-    # Compute intersection (TP) and differences (FN and FP).
-    TP_geom <- st_intersection(gt, pred)
-    FN_geom <- st_difference(gt, pred)
-    FP_geom <- st_difference(pred, gt)
-    
-    # TN: within the ROI, the area that is neither in gt nor in pred.
-    union_gt_pred <- st_union(gt, pred)
-    TN_geom <- st_difference(roi, union_gt_pred)
-    
-    # Compute areas.
-    TP <- safe_area(TP_geom)
-    FP <- safe_area(FP_geom)
-    FN <- safe_area(FN_geom)
-    TN <- safe_area(TN_geom)
-    
-    # Create a tibble of metrics including the current threshold.
-    metrics <- tibble(
-      threshold = th,
-      TP = TP,
-      FP = FP,
-      FN = FN,
-      TN = TN
+      safe_union()
+
+    if (is.null(roi)) stop("Missing ROI for an image")
+
+    gt <- img_sf %>%
+      filter(source == "annotation", classification == cls) %>%
+      safe_union()
+
+    if (!is.null(gt)) {
+      gt <- sf::st_intersection(gt, roi)
+    }
+
+    roi_area <- safe_area(roi)
+    gt_area <- safe_area(gt)
+
+    # Calculate performance at each threshold
+    bind_rows(lapply(thresholds, function(th) {
+
+      pred <- img_sf %>%
+        filter(
+          source == "ai",
+          classification == cls,
+          confidence_percentage >= th
+        ) %>%
+        safe_union()
+
+      if (!is.null(pred)) {
+        pred <- sf::st_intersection(pred, roi)
+      }
+
+      pred_area <- safe_area(pred)
+
+      TP <- overlap_area(gt, pred)
+      FP <- max(0, pred_area - TP)
+      FN <- max(0, gt_area - TP)
+      TN <- max(0, roi_area - TP - FP - FN)
+
+      tibble(
+        threshold = th,
+        TP = TP,
+        FP = FP,
+        FN = FN,
+        TN = TN
+      )
+    }))
+  }
+
+  # Process each image independently
+  results <- split(sf, sf$image_name) %>%
+    lapply(process_image) %>%
+    bind_rows()
+
+  # Sum areas across images and calculate metrics
+  results_df <- results %>%
+    group_by(threshold) %>%
+    summarise(
+      across(c(TP, FP, FN, TN), sum),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      sensitivity = ifelse(TP + FN > 0,
+                           round(100 * TP / (TP + FN), 1), NA_real_),
+
+      specificity = ifelse(TN + FP > 0,
+                           round(100 * TN / (TN + FP), 1), NA_real_),
+
+      ppv = ifelse(TP + FP > 0,
+                   round(100 * TP / (TP + FP), 1), NA_real_),
+
+      npv = ifelse(TN + FN > 0,
+                   round(100 * TN / (TN + FN), 1), NA_real_),
+
+      accuracy = ifelse(TP + TN + FP + FN > 0,
+                        round(100 * (TP + TN) /
+                              (TP + TN + FP + FN), 1), NA_real_),
+
+      f1_score = ifelse(ppv + sensitivity > 0,
+                        round(2 * ppv * sensitivity /
+                              (ppv + sensitivity), 1), NA_real_),
+
+      balanced_accuracy = ifelse(
+        !is.na(sensitivity) & !is.na(specificity),
+        round((sensitivity + specificity) / 2, 1),
+        NA_real_
+      ),
+
+      fpr = 100 - specificity
     )
-    
-    # Compute additional metrics, protecting against division by zero.
-    metrics <- metrics %>%
-      mutate(
-        sensitivity       = ifelse((TP + FN) > 0, round(100 * TP / (TP + FN), 1), NA_real_),
-        specificity       = ifelse((TN + FP) > 0, round(100 * TN / (TN + FP), 1), NA_real_),
-        ppv               = ifelse((TP + FP) > 0, round(100 * TP / (TP + FP), 1), NA_real_),
-        npv               = ifelse((TN + FN) > 0, round(100 * TN / (TN + FN), 1), NA_real_),
-        accuracy          = ifelse((TP + TN + FP + FN) > 0, round(100 * (TP + TN) / (TP + TN + FP + FN), 1), NA_real_),
-        f1_score          = ifelse((ppv + sensitivity) > 0,
-                               round(100 * (2 * (ppv / 100 * sensitivity / 100)) / ((ppv / 100) + (sensitivity / 100)), 1),
-                               NA_real_),
-        balanced_accuracy = ifelse(!is.na(sensitivity) & !is.na(specificity),
-                               round((sensitivity + specificity) / 2, 1),
-                               NA_real_)
-  )
-    
-    return(metrics)
-  })
-  
-  # Combine all results into one tibble.
-  results_df <- bind_rows(results)
-  
-  # Calculate the False Positive Rate (FPR).
-  results_df <- results_df %>% mutate(fpr = 100 - specificity)
-  
-  # For plotting, only include rows with non-missing sensitivity and specificity.
-  plot_data <- results_df %>% filter(!is.na(sensitivity) & !is.na(specificity)) 
-  
-  # Create the plot.
-  p <- ggplot(plot_data, aes(x = fpr, y = sensitivity, color = factor(threshold))) +
-    geom_jitter(size = 4, width = 1, height = 1) +  # Jitter points to reduce overplotting
-    scale_color_manual(values = palette) +          # Custom color palette
-    scale_x_continuous(limits = c(0, 100), expand = c(0, 0)) +  # Force x-axis 0–100
-    scale_y_continuous(limits = c(0, 100), expand = c(0, 0)) +  # Force y-axis 0–100
-    labs(x = "100 - Specificity",
-       y = "Sensitivity",
-       color = "AI confidence threshold (%)",
-       title = cls) +
+
+  # Original plotting approach
+  p <- ggplot(
+    results_df,
+    aes(x = fpr, y = sensitivity, color = factor(threshold))
+  ) +
+    geom_jitter(size = 4, width = 1, height = 1) +
+    scale_color_manual(values = palette) +
+    scale_x_continuous(limits = c(0, 100), expand = c(0, 0)) +
+    scale_y_continuous(limits = c(0, 100), expand = c(0, 0)) +
+    labs(
+      x = "100 - Specificity",
+      y = "Sensitivity",
+      color = "AI confidence threshold (%)",
+      title = cls
+    ) +
     theme_bw(base_family = "Arial") +
     theme(text = element_text(size = 9, family = "Arial"))
 
-  
-  # Return both the metrics table and the plot.
   return(list(metrics = results_df, plot = p))
 }
 
@@ -442,11 +476,11 @@ read_sf_retry <- function(path, retries = 3, wait = 5) {
 This is mainly to set thresholds for confidence. Annotations are by JMW in qupath.
 
 #### Input
-- *roi_list_fe_si_layers_pv6_tuning.json* (fe_si_models/layers/output/qupath_random_roi/)
+- *roi_list_fe_si_layers_pv6_tuning.json* (fe_si_models/histology_component_suite/layers/output/qupath_random_roi/)
 List of image_fragment_names with validation rois (generated with qupath/random_rois.Rmd)
-- *<image_name>_<annotation_name>.geojson* (fe_si_models/output/qupath_export_layer_annotations/)
+- *<image_name>_<annotation_name>.geojson* (fe_si_models/histology_component_suite/layers/output/export_layer_annotations/)
 Crypt /villi annotations made in qupath by JMW in random rois within included fragments
-- *<image_name>_<fragment_name>_layers.geojson* (fe_si_models/combos/output/process_combos/")
+- *<image_name>_<fragment_name>_<model_version>_layers.geojson* (fe_si_models/merge_model_output/map_to_fragment/output/map_to_fragment/")
 
 #### Output
 - *<model_version>_tuning_composition.json* & *<model_version>_tuning_composition.png*
@@ -463,17 +497,17 @@ Performs overall well in tuning set. Most ai output are high confidence. Slight 
 - This do not run after changes to locations / files - will have to restructure to reproduce
 ```{r}
 
-image_fragment_names <- fromJSON("~/Library/CloudStorage/Box-Box/judits_work_keller_lab//fe_si_models/layers/output/qupath_random_roi/roi_list_fe_si_layers_pv6_tuning.json")
+image_fragment_names <- fromJSON("~/Library/CloudStorage/Box-Box/judits_work_keller_lab//fe_si_models/histology_component_suite/layers/output/qupath_random_roi/roi_list_fe_si_layers_pv6_tuning.json")
 
 image_names <- unique(image_fragment_names$image_name)
 
-output_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/layers/output/validate_layers/"
+output_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/histology_component_suite/layers/output/validate_layers/"
 #read in annotations
-annotation_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/layers/output/export_layer_annotations/"
+annotation_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/histology_component_suite/layers/output/export_layer_annotations/"
 annotations <- read_annotations_raw(annotation_dir, image_names) 
 
 #read in ai output
-ai_dir <- "~/Library/CloudStorage/Box-Box/Projects/fe_si_models/combos/output/combos/" 
+ai_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/merge_model_output/map_to_fragment/output/" 
 ai_classes <- c("villi", "crypts")
 model_version <- "fe_si_layers_pv6_mv11"
 
@@ -601,8 +635,6 @@ write_json(empty_metrics_by_threshold$metrics,  paste0(to_box,"Projects/fe_si_mo
 
 
 ### Assess layers model for test set
-
-### Assess layers model in tuning set (for setting hyperparameters)
 #### Input
 - *roi_list_fe_si_layers_pv6_tuning.json* (fe_si_models/layers/output/qupath_random_roi/)
 List of image_fragment_names with validation rois (generated with qupath/random_rois.Rmd)
@@ -622,9 +654,16 @@ Performance for each class by confidence
 Rerun this after downloading and processing ai output
 ```{r}
 
-image_fragment_names <- fromJSON("~/Library/CloudStorage/Box-Box/judits_work_keller_lab//fe_si_models/histology_component_suite//layers/output/qupath_random_roi/roi_list_labl_2020_test.json")
+image_fragment_names <- fromJSON("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/histology_component_suite//layers/output/qupath_random_roi/roi_list_labl_2020_test.json")
 
 image_names <- unique(sub("^(.*)_.*$", "\\1", image_fragment_names))
+
+table_s3 <- readxl::read_xlsx("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_papers/unsupervised_clustering_fe_si_bx/output/parse_path_report/wsi_info_table_s3_2026-10-10.xlsx")
+
+model_test_set <- table_s3 %>% filter(model_test_set) %>%
+  filter(image_name %in% image_names)
+
+image_names <- model_test_set$image_name
 
 output_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/histology_component_suite/layers/output/validate_layers/"
 
@@ -637,7 +676,9 @@ annotations <- read_annotations_raw(annotation_dir, image_names) %>%
 ai_dir <- "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_platforms/aiforia/output/ia_results/"
 ai_classes <- c("villi", "crypts")
 model_version <- "fe_si_combos_pv2_mv2"
+```
 
+```{r}
 ai_output <- NULL
 for (image in image_names){
   
@@ -656,13 +697,17 @@ for (image in image_names){
   ai_output_converted <- convert_linestrings_to_polygons(image_layers)
   ai_output <- bind_rows(ai_output, ai_output_converted)
 }
+```
 
+```{r}
 
 subset_test <- fromJSON("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_images/output/process_subset/subset_labl_2020_test.json") %>% 
   select(image_name, pixel_length_um, pixel_area_um2)
 
 #combine annotations and ai output in one frame
 combined_sf <- bind_rows(annotations, ai_output)
+
+st_write(combined_sf, paste0(output_dir, model_version, "_model_test_combined.geojson"))
 
 # Remove annotations and ai output that doesn't overlap with ROIs and normalize areas to ROI size
 processed_by_roi <- process_roi(combined_sf)
@@ -678,7 +723,9 @@ areas <- processed_by_roi_normalized %>%
 
 roi_data <- processed_by_roi_normalized %>%
   filter(classification == "roi")
+```
 
+```{r}
 #Explore compositon (pct of each class)
 processed_by_roi_normalized_no_roi <- processed_by_roi_normalized %>%
   filter(classification != "roi")
@@ -764,5 +811,10 @@ dev.off()
 
 
 ```
-
+```{r}
+villi_metrics_by_threshold$metrics
+villi_metrics_by_threshold$plot
+crypts_metrics_by_threshold$metrics
+crypts_metrics_by_threshold$plot
+```
 

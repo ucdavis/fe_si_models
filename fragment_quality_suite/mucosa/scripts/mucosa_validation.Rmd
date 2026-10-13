@@ -243,6 +243,17 @@ id_levels <- sprintf("p%02d", 12:14)
 long_tbl  <- long_tbl %>%
   mutate(pathologist_id = factor(pathologist_id, levels = id_levels))
 
+table_s3 <- readxl::read_xlsx("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_papers/unsupervised_clustering_fe_si_bx/output/parse_path_report/wsi_info_table_s3_2026-10-10.xlsx")
+
+pathologist_grading_set <- table_s3 %>% filter(pathologist_grading_set)
+
+long_tbl <- long_tbl %>% 
+  mutate(image_name = sub("_[^_]*_[^_]*$", "", name)) %>%
+  filter(image_name %in% pathologist_grading_set$image_name)
+```
+
+
+```{r}
 
 variable_frames <- map(
   grading_vars,
@@ -296,7 +307,11 @@ majority_grades_mode <- map_dfc(variable_frames_num, ~{
   }
 
 write_json(majority_grades_mode, paste0(output_dir, "majority_grades.json"), pretty = TRUE)
+```
 
+
+```{r}
+majority_grades_mode <- fromJSON(paste0(output_dir, "majority_grades.json"))
 grades_summary <- majority_grades_mode %>%
   pivot_longer(-name, names_to = "variable", values_to = "grade") %>%
   group_by(variable) %>%
@@ -385,7 +400,7 @@ kappa_summary_for_pub <- kappa_summary %>%
   arrange(desc(`Graded quality feature`))
          
          
-write_xlsx(kappa_summary_for_pub, paste0(output_dir, "agreement_summary_table.xlsx"))
+write_xlsx(kappa_summary_for_pub, paste0(output_dir, "agreement_summary_table_new.xlsx"))
 ```
 
 ## Validation
@@ -401,6 +416,7 @@ majority_grades <- fromJSON(paste0(output_dir, "majority_grades.json")) %>%
                               TRUE ~ NA_real_
                               )) %>%
   select(name, small_intestinal_mucosa, orientation, artefact)
+
 ai <- fromJSON("~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_models/fragment_quality_suite/mucosa/output/mucosa/mucosa_list_all.json") %>% 
   filter(name %in% majority_grades$name) %>% 
   mutate(
@@ -526,11 +542,15 @@ summary_df <- template %>%
   ) %>%
   mutate(
     sensitivity = tp / (tp + fn),
+    specificity = tn / (tn + fp),
     ppv = tp / (tp + fp),
+    npv = tn / (tn + fn),
+    accuracy = (tp + tn) / (tp + tn + fp + fn),
+    balanced_accuracy = (sensitivity + specificity) / 2,
     f1 = 2 * ppv * sensitivity / (ppv + sensitivity)
   )
 
-#write_xlxs(template, "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_papers/lymphocyte_distribution_patterns_in_feline_small_intestinal_biopsies/output/")
+writexl::write_xlxs(template, "~/Library/CloudStorage/Box-Box/judits_work_keller_lab/fe_si_papers/lymphocyte_distribution_patterns_in_feline_small_intestinal_biopsies/output/")
 ```
         
         
